@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "note": "Replace every placeholder with immutable generated warehouse ids before paper training.",
+  "train": [
+    "TODO_train_warehouse_ids_53_after_val_carveout"
+  ],
+  "val": [
+    "TODO_validation_warehouse_ids_6"
+  ],
+  "test": [
+    "TODO_held_out_warehouse_ids_11"
+  ]
+}

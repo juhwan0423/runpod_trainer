@@ -1,0 +1,13 @@
+# This is full optimization of Gemma's language backbone/decoder while the
+# model recipe freezes both complete modality encoders and their soft-token
+# embedders/projectors. The explicit method name prevents this run from being
+# misreported as literal all-parameter fine-tuning.
+method: full_text_backbone
+train:
+  learning_rate: 1.0e-5
+  optim: adamw_torch
+
+# Conservative default for 1-2 H100 80 GB GPUs: optimizer state lives in host
+# RAM.  The launch script only permits non-offload ZeRO-3 on >=4 GPUs after an
+# explicit opt-in and smoke test.
+deepspeed: configs/deepspeed/zero3_offload.json

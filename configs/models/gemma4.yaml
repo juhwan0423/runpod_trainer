@@ -1,0 +1,39 @@
+name: gemma4-12b-it
+hf_id: google/gemma-4-12B-it
+# Audited 2026-08-20 snapshot; pins weights, tokenizer, processor, and the
+# generation/chat template together.
+revision: 707f0a3b8a3c7ad586ed01e27eafbad8a27dd0f7
+adapter: gemma4_unified
+model_class: AutoModelForMultimodalLM
+dtype: bfloat16
+attn_implementation: sdpa
+trust_remote_code: false
+
+# The official Gemma 4 config instantiates both modality encoders and their
+# soft-token embedders/projectors.  The primary recipe keeps that complete
+# image/audio input stack fixed and optimizes the language backbone only.
+freeze_prefixes:
+  - model.vision_tower
+  - model.embed_vision
+  - model.audio_tower
+  - model.embed_audio
+
+# A full-path regex is intentional: suffix-only q_proj/etc. matching would
+# also insert LoRA adapters into the vision and unused audio encoders.
+target_modules: 'model\.language_model\..*\.(q_proj|k_proj|v_proj|o_proj|gate_proj|up_proj|down_proj)'
+lora_trainable_path_fragment: .language_model.
+
+# Derived with Transformers 5.12.1 from the pinned config on a meta device.
+# train.py recomputes these with ds_numel after ZeRO-3 initialization and
+# refuses to run if the checkpoint/package contract changes.
+expected_parameter_counts:
+  total: 12211095136
+  trainable: 11907350272
+  frozen_by_prefix:
+    model.vision_tower: 167364608
+    model.embed_vision: 14745600
+    model.audio_tower: 119177056
+    model.embed_audio: 2457600
+
+quantization:
+  load_in_4bit: false

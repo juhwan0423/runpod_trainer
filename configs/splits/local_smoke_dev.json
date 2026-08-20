@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "note": "DEVELOPMENT ONLY: 10 local_smoke warehouses; never report as the paper 59/11 split.",
+  "train": [
+    "warehouse_s10491",
+    "warehouse_s12840",
+    "warehouse_s18117",
+    "warehouse_s24500",
+    "warehouse_s29276",
+    "warehouse_s3137",
+    "warehouse_s31500"
+  ],
+  "val": [
+    "warehouse_s31934"
+  ],
+  "test": [
+    "warehouse_s9108",
+    "warehouse_s991"
+  ]
+}

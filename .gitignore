@@ -1,0 +1,72 @@
+# Python/tool caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Local environments and package caches
+.venv/
+venv/
+env/
+.cache/
+pip-cache/
+hf-cache/
+
+# Secrets and local credentials
+.env
+.env.*
+!.env.example
+.netrc
+credentials*
+secrets*
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+
+# Data, model artifacts, and experiment output
+data/raw/
+data/sft/
+runs/
+logs/
+wandb/
+outputs/
+predictions/
+checkpoints/
+artifacts/
+preflight*.json
+*.safetensors
+*.bin
+*.pt
+*.pth
+*.ckpt
+
+# Generated upload bundles and archives
+dist/
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+*.sha256
+
+# Actual paper split is a private/reproducibility artifact. Keep only the example.
+configs/splits/paper_59_11.json
+
+# Internal source material excluded from the standalone trainer repository
+29_IndustSim_Quad_A_Safety_Awa*.pdf
+ECCV_EMR_workshop_review.md
+masterplan.md
+annotation_sample.json
+annotation_review.md
+image.png
+files.zip
+legacy_configs_do_not_use/
+
+# Editor/OS noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

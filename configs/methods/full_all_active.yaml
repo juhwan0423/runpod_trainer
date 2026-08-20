@@ -1,0 +1,11 @@
+# Pair with models/gemma4_all_active.yaml. "All active" means every branch
+# used by image+text SAIE samples is optimized; the complete unused audio
+# encoder/projector path stays frozen for safe DDP behavior.
+method: full_all_active
+train:
+  learning_rate: 1.0e-5
+  optim: adamw_torch
+
+# Use optimizer offload by default even for two H100 80 GB GPUs.  The launcher
+# permits non-offload ZeRO-3 only on >=4 GPUs after explicit user opt-in.
+deepspeed: configs/deepspeed/zero3_offload.json

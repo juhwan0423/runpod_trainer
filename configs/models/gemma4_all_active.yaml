@@ -1,0 +1,29 @@
+name: gemma4-12b-it-all-active
+hf_id: google/gemma-4-12B-it
+revision: 707f0a3b8a3c7ad586ed01e27eafbad8a27dd0f7
+adapter: gemma4_unified
+model_class: AutoModelForMultimodalLM
+dtype: bfloat16
+attn_implementation: sdpa
+trust_remote_code: false
+
+# Keep the unused audio encoder/projector frozen so DDP does not wait for
+# gradients from a branch absent from SAIE samples.  The vision encoder,
+# vision soft-token embedder/projector, and complete language backbone remain
+# trainable.
+freeze_prefixes:
+  - model.audio_tower
+  - model.embed_audio
+
+target_modules: 'model\.language_model\..*\.(q_proj|k_proj|v_proj|o_proj|gate_proj|up_proj|down_proj)'
+lora_trainable_path_fragment: .language_model.
+
+expected_parameter_counts:
+  total: 12211095136
+  trainable: 12089460480
+  frozen_by_prefix:
+    model.audio_tower: 119177056
+    model.embed_audio: 2457600
+
+quantization:
+  load_in_4bit: false

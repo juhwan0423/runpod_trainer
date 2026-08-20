@@ -1,0 +1,18 @@
+# Audited direct-dependency lock for the RunPod H100 recipe. setup_runpod.sh
+# installs the torch pair from PyTorch's official CUDA 12.6 wheel index first;
+# the exact pins here prevent a later dependency pass from replacing it.
+torch==2.12.1
+torchvision==0.27.1
+transformers==5.12.1
+accelerate==1.14.0
+deepspeed==0.19.3
+peft==0.20.0
+bitsandbytes==0.50.0
+huggingface-hub==1.21.0
+safetensors==0.8.0
+Pillow==12.1.0
+PyYAML==6.0.3
+packaging==25.0
+psutil==7.2.2
+ninja==1.13.0
+wandb==0.21.4
