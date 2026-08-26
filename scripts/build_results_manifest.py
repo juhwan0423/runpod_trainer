@@ -16,6 +16,7 @@ import json
 import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -111,12 +112,19 @@ DATASET_MANIFESTS = {
 }
 
 
+@lru_cache(maxsize=None)
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(8 * 1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+@lru_cache(maxsize=None)
+def count_lines(path: Path) -> int:
+    with path.open("rb") as handle:
+        return sum(1 for _ in handle)
 
 
 def tree_fingerprint(root: Path) -> dict[str, Any]:
@@ -189,8 +197,9 @@ def build_entry(spec: Experiment, workspace: Path) -> tuple[dict[str, Any], list
     prediction_root = artifact_root / spec.prediction_relpath
     prediction_manifest_path = prediction_root / "prediction_export_manifest.json"
     dataset_manifest_path = workspace / DATASET_MANIFESTS[spec.dataset]
+    train_jsonl_path = dataset_manifest_path.parent / "train.jsonl"
 
-    required = [artifact_root, aggregate_path, prediction_root, dataset_manifest_path]
+    required = [artifact_root, aggregate_path, prediction_root, dataset_manifest_path, train_jsonl_path]
     if not spec.allow_missing_prediction_manifest:
         required.append(prediction_manifest_path)
     for path in required:
@@ -235,6 +244,9 @@ def build_entry(spec: Experiment, workspace: Path) -> tuple[dict[str, Any], list
         "dataset_manifest": {
             "path": relative_or_absolute(dataset_manifest_path, workspace),
             "sha256": dataset_manifest_sha,
+            "train_jsonl_path": relative_or_absolute(train_jsonl_path, workspace),
+            "train_jsonl_sha256": sha256_file(train_jsonl_path) if train_jsonl_path.is_file() else None,
+            "train_jsonl_rows": count_lines(train_jsonl_path) if train_jsonl_path.is_file() else None,
         },
         "prediction": {
             "root": relative_or_absolute(prediction_root, workspace),
