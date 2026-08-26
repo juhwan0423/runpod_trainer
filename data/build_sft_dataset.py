@@ -39,6 +39,135 @@ SPLITS = ("train", "val", "test")
 FRAME_RE = re.compile(r"^(?P<prefix>.*?)(?P<index>\d+)(?P<suffix>\.[^.]+)$")
 VIDEO_RE = re.compile(r"_t(?P<index>\d+)$")
 
+# Nominal (dx_m, dyaw_rad) each canonical label commands, per
+# annotation_review.md's parse_action_motion() convention: positive dyaw is
+# left/CCW (confirmed against that audit's own examples, e.g. a `[gauge]
+# stop` row measuring dyaw_rad=+1.3481 while turning left). All task-stop
+# labels command zero motion by definition -- a demonstrator that is
+# genuinely reading a gauge/counting/checking state/reporting an alert
+# should not be moving.
+_NOMINAL_MOTION_M_RAD: dict[str, tuple[float, float]] = {
+    "[navigate] move forward 25 cm": (0.25, 0.0),
+    "[navigate] move forward 50 cm": (0.50, 0.0),
+    "[navigate] move forward 75 cm": (0.75, 0.0),
+    "[navigate] turn left 15 degree": (0.0, math.radians(15)),
+    "[navigate] turn left 30 degree": (0.0, math.radians(30)),
+    "[navigate] turn left 45 degree": (0.0, math.radians(45)),
+    "[navigate] turn right 15 degree": (0.0, -math.radians(15)),
+    "[navigate] turn right 30 degree": (0.0, -math.radians(30)),
+    "[navigate] turn right 45 degree": (0.0, -math.radians(45)),
+    "[navigate] stop": (0.0, 0.0),
+    "[gauge] stop": (0.0, 0.0),
+    "[count] stop": (0.0, 0.0),
+    "[state] stop": (0.0, 0.0),
+    "[alert] stop": (0.0, 0.0),
+}
+# SE(2) distance weight on yaw error, matching the judge's own
+# NAV_SE2_K=0.5 m/rad convention (annotation_review.md section 4) so that
+# "resolve-via-motion" arbitration and the physical-grounding audit use the
+# same metric the paper's evaluation already relies on.
+_SE2_YAW_WEIGHT_M_PER_RAD = 0.5
+# Minimum absolute gap (in the same SE2-error units, ~meters) between the two
+# conflicting candidates' errors before a duplicate is considered physically
+# resolved rather than ambiguous. Deliberately conservative: an unresolved
+# conflict falls back to exclude-conflicts (drop both) rather than guessing.
+_MOTION_RESOLUTION_MARGIN_M = 0.15
+_MOTION_RESOLUTION_MAX_ERROR_M = 0.15
+
+
+def _error_distribution(values: list[float]) -> dict[str, Any]:
+    if not values:
+        return {"n": 0}
+    ordered = sorted(values)
+    n = len(ordered)
+
+    def _percentile(p: float) -> float:
+        if n == 1:
+            return ordered[0]
+        rank = p * (n - 1)
+        lo = int(math.floor(rank))
+        hi = int(math.ceil(rank))
+        if lo == hi:
+            return ordered[lo]
+        return ordered[lo] + (ordered[hi] - ordered[lo]) * (rank - lo)
+
+    buckets = {"<=0.05m": 0, "<=0.25m": 0, "<=0.5m": 0, "<=1.0m": 0, ">1.0m": 0}
+    for value in ordered:
+        if value <= 0.05:
+            buckets["<=0.05m"] += 1
+        elif value <= 0.25:
+            buckets["<=0.25m"] += 1
+        elif value <= 0.5:
+            buckets["<=0.5m"] += 1
+        elif value <= 1.0:
+            buckets["<=1.0m"] += 1
+        else:
+            buckets[">1.0m"] += 1
+    return {
+        "n": n,
+        "mean": sum(ordered) / n,
+        "median": _percentile(0.5),
+        "p90": _percentile(0.9),
+        "max": ordered[-1],
+        "histogram_m": buckets,
+    }
+
+
+def _se2_error(measured: tuple[float, float], nominal: tuple[float, float]) -> float:
+    dx_err = measured[0] - nominal[0]
+    dyaw_err = measured[1] - nominal[1]
+    return math.sqrt(dx_err**2 + (_SE2_YAW_WEIGHT_M_PER_RAD * dyaw_err) ** 2)
+
+
+# motion_summary events are logged on a fixed ~30-render-frame cadence
+# (confirmed empirically against real sim_events.json files), while decision
+# anchors (video_id / source_frame_id) land off that grid -- an exact-frame
+# dict lookup therefore misses the large majority of rows. Search the
+# nearest logged motion_summary within this many render frames instead
+# (half the observed cadence, so every anchor has a candidate within range
+# except right at an episode's very start/end).
+_MOTION_LOOKUP_TOLERANCE_FRAMES = 15
+
+
+class _EpisodeMotionIndex:
+    """Nearest-frame lookup into an episode's motion_summary events.
+
+    Mirrors the exporter's own `_build_motion_summary_index` / the judge's
+    `_build_motion_index` pattern (both keyed by render_frame off
+    `spot_events` entries with `event == "motion_summary"`), reimplemented
+    here so this builder never needs to import the oem6-owned exporter or
+    judge modules.
+    """
+
+    def __init__(self, warehouse_dir: Path, episode_id: str) -> None:
+        path = warehouse_dir / "frames" / episode_id / "sim_events.json"
+        entries: list[tuple[int, float, float]] = []
+        if path.is_file():
+            events = _read_json(path)
+            for entry in events.get("spot_events") or []:
+                if not isinstance(entry, dict) or entry.get("event") != "motion_summary":
+                    continue
+                render_frame = entry.get("render_frame")
+                dx = entry.get("dx")
+                dyaw = entry.get("dyaw")
+                if isinstance(render_frame, int) and _finite_number(dx) and _finite_number(dyaw):
+                    entries.append((render_frame, float(dx), float(dyaw)))
+        entries.sort(key=lambda item: item[0])
+        self._frames = [item[0] for item in entries]
+        self._values = [(item[1], item[2]) for item in entries]
+
+    def nearest(self, render_frame: int) -> tuple[float, float] | None:
+        if not self._frames:
+            return None
+        idx = bisect.bisect_left(self._frames, render_frame)
+        candidates = [i for i in (idx - 1, idx) if 0 <= i < len(self._frames)]
+        if not candidates:
+            return None
+        best = min(candidates, key=lambda i: abs(self._frames[i] - render_frame))
+        if abs(self._frames[best] - render_frame) > _MOTION_LOOKUP_TOLERANCE_FRAMES:
+            return None
+        return self._values[best]
+
 
 def _normalise_hazard_type(value: Any) -> str | None:
     if value is None:
@@ -515,9 +644,36 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--allow-empty-split", action="store_true")
     parser.add_argument(
         "--duplicate-policy",
-        choices=("error", "exclude-conflicts", "first", "prefer-task-stop"),
+        choices=("error", "exclude-conflicts", "first", "prefer-task-stop", "resolve-via-motion"),
         default="error",
-        help="paper runs must use error; repair policies are development-only and recorded",
+        help=(
+            "paper runs must use error; repair policies are development-only and recorded. "
+            "resolve-via-motion arbitrates conflicting same-video_id rows using the shared "
+            "decision frame's actual sim_events.json motion_summary against each candidate "
+            "label's nominal motion; falls back to exclude-conflicts when ambiguous"
+        ),
+    )
+    parser.add_argument(
+        "--balance-cap",
+        type=int,
+        default=None,
+        help=(
+            "cap each action_label's row count in the train split only (random subsample, "
+            "seeded by --seed); val/test always keep the natural distribution so they stay "
+            "comparable to the paper's protocol"
+        ),
+    )
+    parser.add_argument(
+        "--max-motion-error-m",
+        type=float,
+        default=None,
+        help=(
+            "exclude train-split navigate rows whose nominal-vs-measured SE(2) motion error "
+            "exceeds this (meters-equivalent, same metric as resolve-via-motion). Unset by "
+            "default: the full error distribution is always logged into dataset_manifest.json "
+            "regardless of this flag, so the threshold can be chosen from real numbers instead "
+            "of guessed up front"
+        ),
     )
     parser.add_argument(
         "--require-all-train-labels", action=argparse.BooleanOptionalAction, default=True
@@ -584,6 +740,10 @@ def main() -> int:
     duplicate_examples: list[str] = []
     conflicting_duplicates = 0
     conflict_examples: list[dict[str, str]] = []
+    motion_resolved_examples: list[dict[str, Any]] = []
+    motion_ambiguous_examples: list[dict[str, Any]] = []
+    motion_resolved_count = 0
+    motion_ambiguous_count = 0
     invalid_episodes: dict[str, str | None] = {}
     valid_episodes: set[str] = set()
     missing_master_episodes: set[str] = set()
@@ -594,6 +754,12 @@ def main() -> int:
     decision_order_examples: list[dict[str, Any]] = []
     last_anchor_by_episode: dict[str, int] = {}
     source_task_groups: dict[str, set[str]] = {}
+    # Physical-grounding audit: SE(2) error between every navigate row's
+    # nominal primitive and its actually-measured motion at that decision's
+    # render_frame -- collected for ALL navigate rows (not just conflicts),
+    # extending annotation_review.md section 4's 52-row-sample audit to the
+    # full corpus. Always collected regardless of --max-motion-error-m.
+    navigate_motion_errors: list[float] = []
 
     for warehouse_dir in warehouses:
         warehouse_id = warehouse_dir.name
@@ -608,6 +774,7 @@ def main() -> int:
             source_files.append(annotation_path)
             metadata_cache: dict[str, dict[str, Any]] = {}
             invalid_cache: dict[str, bool] = {}
+            motion_index_cache: dict[str, _EpisodeMotionIndex] = {}
             for item_index, item in enumerate(annotations):
                 if not isinstance(item, dict):
                     raise ValueError(f"{annotation_path}[{item_index}]: expected an object")
@@ -731,6 +898,15 @@ def main() -> int:
                     "source_annotation": annotation_path.relative_to(source_root).as_posix(),
                     "split_tags": [f"hazard:{hazard_type}"] if hazard_type else [],
                 }
+                if episode_id not in motion_index_cache:
+                    motion_index_cache[episode_id] = _EpisodeMotionIndex(warehouse_dir, episode_id)
+                measured_motion = motion_index_cache[episode_id].nearest(source_anchor)
+                motion_error_m: float | None = None
+                if measured_motion is not None and label in _NOMINAL_MOTION_M_RAD:
+                    motion_error_m = _se2_error(measured_motion, _NOMINAL_MOTION_M_RAD[label])
+                    if group == "navigate":
+                        navigate_motion_errors.append(motion_error_m)
+                row["_motion_error_m"] = motion_error_m
                 if row_id in seen_row_ids:
                     old_signature, old_row = seen_row_ids[row_id]
                     if args.duplicate_policy == "error":
@@ -760,17 +936,107 @@ def main() -> int:
                                 old_row.clear()
                                 old_row.update(row)
                                 seen_row_ids[row_id] = (signature, old_row)
+                        elif args.duplicate_policy == "resolve-via-motion":
+                            old_label = old_signature[0]
+                            resolvable = (
+                                measured_motion is not None
+                                and old_label in _NOMINAL_MOTION_M_RAD
+                                and label in _NOMINAL_MOTION_M_RAD
+                            )
+                            old_error = new_error = None
+                            if resolvable:
+                                old_error = _se2_error(measured_motion, _NOMINAL_MOTION_M_RAD[old_label])
+                                new_error = _se2_error(measured_motion, _NOMINAL_MOTION_M_RAD[label])
+                            if (
+                                resolvable
+                                and min(old_error, new_error) <= _MOTION_RESOLUTION_MAX_ERROR_M
+                                and abs(old_error - new_error) >= _MOTION_RESOLUTION_MARGIN_M
+                            ):
+                                motion_resolved_count += 1
+                                winner_is_new = new_error < old_error
+                                if len(motion_resolved_examples) < 20:
+                                    motion_resolved_examples.append(
+                                        {
+                                            "frame_id": row_id,
+                                            "measured_dx_m": measured_motion[0],
+                                            "measured_dyaw_rad": measured_motion[1],
+                                            "kept": label if winner_is_new else old_label,
+                                            "kept_error_m": round(new_error if winner_is_new else old_error, 4),
+                                            "dropped": old_label if winner_is_new else label,
+                                            "dropped_error_m": round(old_error if winner_is_new else new_error, 4),
+                                        }
+                                    )
+                                if winner_is_new:
+                                    old_row.clear()
+                                    old_row.update(row)
+                                    seen_row_ids[row_id] = (signature, old_row)
+                                # else: old_row already holds the winning candidate; the new
+                                # `row` built above is simply discarded by the `continue` below.
+                            else:
+                                motion_ambiguous_count += 1
+                                if len(motion_ambiguous_examples) < 20:
+                                    motion_ambiguous_examples.append(
+                                        {
+                                            "frame_id": row_id,
+                                            "reason": (
+                                                "no motion_summary at shared render_frame"
+                                                if not resolvable
+                                                else "errors too close or both too large to trust"
+                                            ),
+                                            "old_label": old_label,
+                                            "new_label": label,
+                                            "old_error_m": round(old_error, 4) if old_error is not None else None,
+                                            "new_error_m": round(new_error, 4) if new_error is not None else None,
+                                        }
+                                    )
+                                old_row["_exclude_conflict"] = True
                     continue
                 seen_row_ids[row_id] = (signature, row)
                 buckets[split].append(row)
 
     source_valid_buckets: dict[str, list[dict[str, Any]]] = {}
+    motion_error_excluded_train = 0
     for split in SPLITS:
-        cleaned = [row for row in buckets[split] if not row.pop("_exclude_conflict", False)]
+        cleaned = []
+        for row in buckets[split]:
+            excluded_conflict = row.pop("_exclude_conflict", False)
+            motion_error_m = row.pop("_motion_error_m", None)
+            if excluded_conflict:
+                continue
+            # --max-motion-error-m only ever trims train: val/test must keep
+            # the natural (possibly ungrounded) distribution so scores stay
+            # comparable to the paper's original evaluation protocol.
+            if (
+                split == "train"
+                and args.max_motion_error_m is not None
+                and motion_error_m is not None
+                and motion_error_m > args.max_motion_error_m
+            ):
+                motion_error_excluded_train += 1
+                continue
+            cleaned.append(row)
         source_valid_buckets[split] = list(cleaned)
         buckets[split] = _apply_ablation(cleaned, split, args.ablation, held_out_hazards)
         if not buckets[split] and not args.allow_empty_split:
             raise ValueError(f"{split} split is empty after applying {args.ablation!r}")
+
+    balance_cap_before: dict[str, int] = {}
+    balance_cap_after: dict[str, int] = {}
+    if args.balance_cap is not None:
+        rng = random.Random(args.seed)
+        by_label: dict[str, list[dict[str, Any]]] = {}
+        for row in buckets["train"]:
+            by_label.setdefault(row["action_label"], []).append(row)
+        capped_train: list[dict[str, Any]] = []
+        for label_key, rows in by_label.items():
+            balance_cap_before[label_key] = len(rows)
+            kept = rng.sample(rows, args.balance_cap) if len(rows) > args.balance_cap else rows
+            balance_cap_after[label_key] = len(kept)
+            capped_train.extend(kept)
+        rng.shuffle(capped_train)
+        buckets["train"] = capped_train
+        if not buckets["train"] and not args.allow_empty_split:
+            raise ValueError("train split is empty after applying --balance-cap")
 
     split_warehouses = {
         split: {row["warehouse_id"] for row in rows} for split, rows in buckets.items()
@@ -1090,7 +1356,49 @@ def main() -> int:
             "conflicting_duplicate_rows_resolved": conflicting_duplicates,
             "examples": duplicate_examples,
             "conflict_examples": conflict_examples,
+            # Only populated (non-zero) when --duplicate-policy resolve-via-motion:
+            # conflicts arbitrated by comparing each candidate label's nominal
+            # motion against the shared decision frame's actually-measured
+            # sim_events.json motion_summary, vs. conflicts where that
+            # comparison was unavailable or too close to trust (fell back to
+            # exclude-conflicts either way).
+            "motion_resolved_count": motion_resolved_count,
+            "motion_resolved_examples": motion_resolved_examples,
+            "motion_ambiguous_count": motion_ambiguous_count,
+            "motion_ambiguous_examples": motion_ambiguous_examples,
         },
+        # Full-corpus extension of annotation_review.md section 4's 52-row
+        # sample audit: for every navigate row, the SE(2) distance between
+        # its label's nominal primitive and the demonstrator's actually
+        # measured motion at that decision frame (same NAV_SE2_K=0.5 metric
+        # the judge itself uses). Always computed regardless of
+        # --max-motion-error-m, so a filtering threshold can be chosen from
+        # real numbers rather than guessed.
+        "physical_grounding": {
+            "metric": "sqrt(dx_err_m^2 + (0.5*dyaw_err_rad)^2)",
+            "motion_lookup_tolerance_frames": _MOTION_LOOKUP_TOLERANCE_FRAMES,
+            "caveat": (
+                "measured motion is the NEAREST logged motion_summary within "
+                f"{_MOTION_LOOKUP_TOLERANCE_FRAMES} render frames of the decision anchor, not "
+                "always the exact frame (spot_events motion_summary logging runs on a fixed "
+                "~30-frame cadence that decision anchors don't land on) -- part of the measured "
+                "error is temporal misalignment (up to 0.5s at 30fps), not pure label/primitive "
+                "mismatch, so these numbers are a plausible upper bound on the true grounding error"
+            ),
+            "navigate_rows_measured": _error_distribution(navigate_motion_errors),
+            "max_motion_error_m_filter": args.max_motion_error_m,
+            "train_rows_excluded_by_filter": motion_error_excluded_train,
+        },
+        "balance_policy": (
+            {
+                "cap": args.balance_cap,
+                "seed": args.seed,
+                "train_label_counts_before": balance_cap_before,
+                "train_label_counts_after": balance_cap_after,
+            }
+            if args.balance_cap is not None
+            else None
+        ),
         "missing_train_labels": missing_train_labels,
         "missing_val_labels": missing_val_labels,
         "splits": {split: _summary(rows) for split, rows in buckets.items()},

@@ -46,6 +46,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-free-gb", type=float, default=20.0)
     parser.add_argument("--min-ram-gb", type=float, default=0.0)
     parser.add_argument("--report", type=Path)
+    parser.add_argument(
+        "--requirements-file",
+        type=Path,
+        default=ROOT / "requirements-runpod.txt",
+        help="pinned-package manifest to check the active interpreter against "
+        "(defaults to the original Gemma4 venv's requirements-runpod.txt; pass "
+        "requirements-navila.txt or similar when preflighting a different venv)",
+    )
     return parser.parse_args()
 
 
@@ -63,20 +71,29 @@ def file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def package_check(checks: list[dict[str, Any]]) -> None:
-    required = {
-        "torch": "2.12.1",
-        "torchvision": "0.27.1",
-        "transformers": "5.12.1",
-        "accelerate": "1.14.0",
-        "deepspeed": "0.19.3",
-        "peft": "0.20.0",
-        "bitsandbytes": "0.50.0",
-        "huggingface-hub": "1.21.0",
-        "safetensors": "0.8.0",
-        "Pillow": "12.1.0",
-        "PyYAML": "6.0.3",
-    }
+def parse_pinned_requirements(path: Path) -> dict[str, str]:
+    """Extract exact ``name==version`` pins from a requirements file.
+
+    Lines without a bare ``==`` pin (range specifiers, unpinned packages,
+    comments) are skipped rather than guessed at -- this only checks what
+    the requirements file actually promises.
+    """
+    pinned: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.split("#", 1)[0].strip()
+        if not line or "==" not in line or any(op in line for op in ("<", ">", ";")):
+            continue
+        name, _, ver = line.partition("==")
+        pinned[name.strip()] = ver.strip()
+    return pinned
+
+
+def package_check(checks: list[dict[str, Any]], requirements_file: Path) -> None:
+    # Requirements-file-driven (not hardcoded) so this works for any model's
+    # venv, not just the original single-venv Gemma4 recipe -- NaVILA and any
+    # future adapter each pin a different, incompatible transformers/torch
+    # stack in their own requirements-*.txt (see requirements-navila.txt).
+    required = parse_pinned_requirements(requirements_file)
     for package, required_version in required.items():
         try:
             installed = version(package)
@@ -548,7 +565,8 @@ def model_architecture_contract_check(
             f"model_type={config.model_type} "
             f"vision={getattr(vision, 'model_type', type(vision).__name__)} "
             f"audio={getattr(audio, 'model_type', type(audio).__name__)}; "
-            "expected runtime prefixes=model.vision_tower/model.audio_tower",
+            "expected runtime prefixes=model.vision_embedder/model.embed_vision/model.embed_audio "
+            "(no separate audio tower; corrected 2026-08-21 against the real checkpoint)",
         )
     except Exception as exc:
         add(
@@ -562,7 +580,7 @@ def model_architecture_contract_check(
 def main() -> int:
     args = parse_args()
     checks: list[dict[str, Any]] = []
-    package_check(checks)
+    package_check(checks, args.requirements_file)
 
     data_root = args.data_root.expanduser().resolve()
     image_root = args.image_root.expanduser().resolve()
