@@ -14,16 +14,18 @@ class Gemma4TrainingScopeTests(unittest.TestCase):
     def _model_config(self, filename: str) -> dict:
         return yaml.safe_load((ROOT / "configs/models" / filename).read_text(encoding="utf-8"))
 
-    def test_text_backbone_freezes_complete_modality_paths(self) -> None:
+    def test_text_backbone_freezes_loaded_modality_paths(self) -> None:
         config = self._model_config("gemma4.yaml")
         self.assertEqual(
             set(config["freeze_prefixes"]),
             {
-                "model.vision_tower",
                 "model.embed_vision",
-                "model.audio_tower",
                 "model.embed_audio",
             },
+        )
+        self.assertEqual(
+            set(config["full_text_backbone_freeze_prefixes"]),
+            set(config["freeze_prefixes"]),
         )
         counts = config["expected_parameter_counts"]
         self.assertEqual(
@@ -31,11 +33,11 @@ class Gemma4TrainingScopeTests(unittest.TestCase):
             counts["total"],
         )
 
-    def test_all_active_freezes_only_complete_unused_audio_path(self) -> None:
+    def test_all_active_freezes_only_loaded_unused_audio_path(self) -> None:
         config = self._model_config("gemma4_all_active.yaml")
         self.assertEqual(
             set(config["freeze_prefixes"]),
-            {"model.audio_tower", "model.embed_audio"},
+            {"model.embed_audio"},
         )
         counts = config["expected_parameter_counts"]
         self.assertEqual(

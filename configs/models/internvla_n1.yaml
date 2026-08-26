@@ -1,0 +1,91 @@
+name: internvla-n1-dualvln
+hf_id: InternRobotics/InternVLA-N1-DualVLN
+# Pinned from the locally cached snapshot's .cache/huggingface/download/*.metadata
+# (consistent commit across every file), 2026-08-22.
+revision: a698a9e898b4001621a319e1bc89f02ec715cc86
+adapter: internvla_n1_unified
+model_class: InternVLAN1ForCausalLM
+dtype: bfloat16
+attn_implementation: sdpa
+trust_remote_code: false
+
+# Verified live 2026-08-22 (scripts/verify_internvla_n1_module_names.py) --
+# do NOT hand-edit these without re-running that script first. Real
+# top-level prefixes on the raw InternVLAN1ForCausalLM are `visual.*`,
+# `model.layers.*`, `lm_head.*` -- but models/registry.py's
+# InternVLAN1UnifiedAdapter.load() returns an InternVLAN1TextWrapper that
+# stores the raw model as `self.backbone`, so every prefix below is
+# `backbone.<real name>`. System-1 (dual-system diffusion trajectory) heads
+# are frozen/unused for this text-only SFT recipe -- config.system1 ==
+# "nextdit_async" on this checkpoint, so all of them are real, instantiated
+# submodules, not absent.
+freeze_prefixes:
+  - backbone.visual
+  - backbone.model.latent_queries
+  - backbone.model.traj_dit
+  - backbone.model.action_encoder
+  - backbone.model.action_decoder
+  - backbone.model.cond_projector
+  - backbone.model.memory_encoder
+  - backbone.model.rgb_resampler
+  - backbone.model.rgb_model
+
+full_text_backbone_freeze_prefixes:
+  - backbone.visual
+  - backbone.model.latent_queries
+  - backbone.model.traj_dit
+  - backbone.model.action_encoder
+  - backbone.model.action_decoder
+  - backbone.model.cond_projector
+  - backbone.model.memory_encoder
+  - backbone.model.rgb_resampler
+  - backbone.model.rgb_model
+
+# Anchored on backbone.model.layers. so it cannot accidentally match
+# anything under backbone.visual (Qwen2.5-VL's ViT uses fused qkv/proj
+# naming anyway, so it wouldn't collide even unanchored -- anchoring is
+# belt-and-suspenders consistency with the other adapters in this registry).
+target_modules: 'backbone\.model\.layers\.\d+\.(self_attn\.(q_proj|k_proj|v_proj|o_proj)|mlp\.(gate_proj|up_proj|down_proj))'
+lora_trainable_path_fragment: backbone.model.layers.
+
+# Measured directly against the real pinned checkpoint -- 2026-08-22.
+# Re-measured a second time after adding `ignore_mismatched_sizes=True` to
+# InternVLAN1UnifiedAdapter.load() (models/registry.py): the checkout of
+# internnav at /home/oem6/InternNav has an uncommitted local fix to
+# nextdit_traj.py's LuminaFeedForward inner_dim formula that does not
+# perfectly match this checkpoint's saved traj_dit shapes for at least one
+# dimension (real from_pretrained() error otherwise: "1024 in the checkpoint
+# vs 768 in the model instantiated" for every feed_forward.linear_{1,2,3} in
+# all 12 traj_dit layers). Harmless to ignore since traj_dit (System-1) is
+# entirely frozen and InternVLAN1TextWrapper never calls into it -- but it
+# does shrink traj_dit's real parameter count vs. the first measurement
+# (34,980,168 -> 31,441,224), which only affects the frozen bucket; trainable
+# is unchanged since traj_dit was always 100% frozen.
+#   backbone.visual                    676,550,144
+#   backbone.model.action_decoder            1,155
+#   backbone.model.action_encoder            1,536
+#   backbone.model.cond_projector        3,343,872
+#   backbone.model.latent_queries           14,336
+#   backbone.model.memory_encoder        6,701,184
+#   backbone.model.rgb_model            22,056,576
+#   backbone.model.rgb_resampler        24,273,408
+#   backbone.model.traj_dit             31,441,224
+#   TOTAL frozen                       764,383,435
+#   trainable (layers+norm+embed+lm_head) 7,615,616,512
+#   TOTAL                               8,379,999,947
+expected_parameter_counts:
+  total: 8379999947
+  trainable: 7615616512
+  frozen_by_prefix:
+    backbone.visual: 676550144
+    backbone.model.action_decoder: 1155
+    backbone.model.action_encoder: 1536
+    backbone.model.cond_projector: 3343872
+    backbone.model.latent_queries: 14336
+    backbone.model.memory_encoder: 6701184
+    backbone.model.rgb_model: 22056576
+    backbone.model.rgb_resampler: 24273408
+    backbone.model.traj_dit: 31441224
+
+quantization:
+  load_in_4bit: false

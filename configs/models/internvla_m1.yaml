@@ -1,0 +1,47 @@
+name: internvla-m1
+hf_id: InternRobotics/InternVLA-M1
+# Pinned 2026-08-25 via the HF Hub API's model-info `sha` field (current
+# default-branch commit at pin time). Confirmed via the same API call that
+# this checkpoint is a *plain* transformers release
+# (architectures=["Qwen2_5_VLForConditionalGeneration"],
+# library_name=transformers, auto_model=AutoModelForMultimodalLM) -- see
+# models/registry.py's InternVLAM1UnifiedAdapter docstring for the full
+# investigation (this is NOT the GitHub repo's raw .pt checkpoint + DINO/
+# QFormer/action-head structure, just the Qwen2.5-VL backbone weights).
+revision: ce8a34244d1da9cf5136743f28f1a619168a5185
+adapter: internvla_m1_unified
+model_class: AutoModelForMultimodalLM
+dtype: bfloat16
+attn_implementation: sdpa
+trust_remote_code: false
+
+# License is cc-by-nc-sa-4.0 (non-commercial) -- confirmed via HF Hub API
+# cardData.license. Fine for research use; flag explicitly if these numbers
+# go in the paper.
+
+# NOTE: freeze_prefixes/target_modules are derived from reading transformers'
+# own Qwen2_5_VLForConditionalGeneration source (Qwen2_5_VLModel.__init__ sets
+# self.visual/self.language_model; Qwen2_5_VLForConditionalGeneration.__init__
+# sets self.model=Qwen2_5_VLModel(...) and self.lm_head). expected_parameter_counts
+# below IS now a live-verified measurement (see its own comment).
+freeze_prefixes:
+  - model.visual
+
+full_text_backbone_freeze_prefixes:
+  - model.visual
+
+target_modules: 'model\.language_model\.layers\.\d+\.(self_attn\.(q_proj|k_proj|v_proj|o_proj)|mlp\.(gate_proj|up_proj|down_proj))'
+lora_trainable_path_fragment: .language_model.
+
+# Measured 2026-08-25 from a real full_text_backbone FFT launch on Pod2
+# (4x H100) -- train.py's own contract check reported these as the actual
+# live numbers when the prior placeholder guess mismatched. The vision
+# tower guess (354M) was off by ~2x; real model.visual is 669M.
+expected_parameter_counts:
+  total: 3754622976
+  trainable: 3085938688
+  frozen_by_prefix:
+    model.visual: 668684288
+
+quantization:
+  load_in_4bit: false

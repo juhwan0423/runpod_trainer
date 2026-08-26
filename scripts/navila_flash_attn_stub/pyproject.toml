@@ -1,0 +1,12 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "flash-attn-import-stub"
+version = "0.0.0"
+description = "Import-only stub satisfying llava's eager, unconditional flash_attn import chain"
+requires-python = ">=3.8"
+
+[tool.setuptools]
+packages = ["flash_attn"]

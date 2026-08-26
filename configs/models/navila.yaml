@@ -1,0 +1,52 @@
+name: navila-llama3-8b-8f
+hf_id: a8cheng/navila-llama3-8b-8f
+# Pinned 2026-08-21 via `curl https://huggingface.co/api/models/a8cheng/navila-llama3-8b-8f`
+# (HF Hub API `sha` field for the repo's current default-branch commit at
+# pin time). load_pretrained_model() has no revision kwarg of its own --
+# navila_unified.load() calls huggingface_hub.snapshot_download(hf_id,
+# revision=...) itself and passes the resulting local snapshot dir into
+# llava's loader, so this value actually gates what gets downloaded.
+revision: b2294e96581454468d6b94f38201f4f965ef48b7
+adapter: navila_unified
+dtype: bfloat16
+
+# Confirmed 2026-08-22 with a live named_parameters() dump, matched the
+# doc-derived guess exactly (unlike Gemma4's 4/4 streak of wrong guesses).
+# Re-confirmed identical under the real training path on 4x H100 with
+# DeepSpeed ZeRO-2 (NOT ZeRO-3 -- see train.py comments / NaVILA_implementation.md
+# section 10 for why ZeRO-3 is unusable here), full smoke run including a
+# real forward+backward+optimizer step and checkpoint save.
+freeze_prefixes:
+  - vision_tower
+  - mm_projector
+
+# Anchored on the llm. prefix, not bare q_proj/etc. suffixes: SigLIP's
+# attention module inside vision_tower also uses q_proj/k_proj/v_proj names
+# (though not o_proj), so an unanchored regex would silently also insert
+# LoRA adapters into the (supposed to be frozen) vision encoder.
+target_modules: '^llm\..*\.(q_proj|k_proj|v_proj|o_proj|gate_proj|up_proj|down_proj)$'
+lora_trainable_path_fragment: 'llm.'
+
+# Measured 2026-08-22 on 4x H100 (DeepSpeed ZeRO-2, configs/deepspeed/zero2_offload.json),
+# a full smoke run through scripts/launch_navila_runpod.sh smoke against the
+# complete (non-subset) dataset -- not a guess, not a single-process-only
+# number. See NaVILA_implementation.md section 2 for the single-process
+# cross-check that matched exactly.
+expected_parameter_counts:
+  total: 8494180416
+  trainable: 8030285824
+  frozen_by_prefix:
+    vision_tower: 428225600
+    mm_projector: 35668992
+
+# Required by train.py's full_text_backbone method contract (see train.py
+# generalization notes) -- must exactly equal freeze_prefixes above for that
+# method; kept as a separate field (rather than reusing freeze_prefixes
+# directly) so a future person editing freeze_prefixes without updating this
+# fails closed instead of silently changing what full_text_backbone trains.
+full_text_backbone_freeze_prefixes:
+  - vision_tower
+  - mm_projector
+
+quantization:
+  load_in_4bit: false

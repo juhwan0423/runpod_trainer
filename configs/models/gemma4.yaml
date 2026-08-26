@@ -9,13 +9,36 @@ dtype: bfloat16
 attn_implementation: sdpa
 trust_remote_code: false
 
-# The official Gemma 4 config instantiates both modality encoders and their
-# soft-token embedders/projectors.  The primary recipe keeps that complete
-# image/audio input stack fixed and optimizes the language backbone only.
+# Corrected 2026-08-21 on RunPod H100 by actually loading the pinned
+# checkpoint with transformers==5.12.1 and inspecting named_parameters()
+# directly (not just the safetensors file on disk). The checkpoint's raw
+# model.safetensors contains an extra "model.vision_embedder.*" tensor group
+# (35176704 params: patch_dense/patch_ln1/patch_ln2/pos_embedding -- looks
+# like a real small vision tower) but transformers==5.12.1's actual
+# Gemma4UnifiedModel class does NOT define that submodule at all -- those
+# checkpoint weights are silently dropped as unused during from_pretrained.
+# The only top-level submodules that really exist on the loaded model are:
+#   model.language_model   (11907350320 params)
+#   model.embed_vision       (14745600 params -- just embedding_projection)
+#   model.embed_audio         (2457600 params)
+# i.e. there is no loaded vision "tower" in this checkpoint/library
+# combination at all, just a small soft-token projector. Confirmed via
+# `dir(model.model)` and `model.forward` signature (accepts pixel_values).
+# FLAG: this means image patch feature extraction must be happening
+# somewhere in the processor/embed_vision path with much less trainable
+# capacity than the config comment below originally assumed -- verify with
+# an actual image-sensitivity check (does changing the input image change
+# output logits) before trusting multimodal training results.
 freeze_prefixes:
-  - model.vision_tower
   - model.embed_vision
-  - model.audio_tower
+  - model.embed_audio
+
+# Required by train.py's full_text_backbone method contract (generalized
+# 2026-08-21 when the navila_unified adapter was added -- this used to be a
+# hardcoded literal check in train.py itself). Must exactly equal
+# freeze_prefixes above for that method.
+full_text_backbone_freeze_prefixes:
+  - model.embed_vision
   - model.embed_audio
 
 # A full-path regex is intentional: suffix-only q_proj/etc. matching would
@@ -23,16 +46,20 @@ freeze_prefixes:
 target_modules: 'model\.language_model\..*\.(q_proj|k_proj|v_proj|o_proj|gate_proj|up_proj|down_proj)'
 lora_trainable_path_fragment: .language_model.
 
-# Derived with Transformers 5.12.1 from the pinned config on a meta device.
-# train.py recomputes these with ds_numel after ZeRO-3 initialization and
-# refuses to run if the checkpoint/package contract changes.
+# Derived from the ACTUAL smoke-test run's own contract check (ZeRO-3,
+# ds_numel), not a standalone single-process load: a plain
+# AutoModelForMultimodalLM.from_pretrained() outside DeepSpeed measured
+# model.embed_vision at 14745600 params, but the real training path (under
+# deepspeed.zero.Init) measures 49922304 -- apparently DeepSpeed's init
+# context causes more of the checkpoint's vision weights to actually get
+# materialized into embed_vision than a bare from_pretrained() does. Treat
+# this file's numbers, not a standalone script's, as ground truth; train.py
+# refuses to run if the checkpoint/package contract changes again.
 expected_parameter_counts:
-  total: 12211095136
+  total: 11959730176
   trainable: 11907350272
   frozen_by_prefix:
-    model.vision_tower: 167364608
-    model.embed_vision: 14745600
-    model.audio_tower: 119177056
+    model.embed_vision: 49922304
     model.embed_audio: 2457600
 
 quantization:

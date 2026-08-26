@@ -22,6 +22,28 @@ from typing import Any
 
 import yaml
 
+try:
+    # Import order workaround, not optional cleanup: with some
+    # transformers/deepspeed pairings (confirmed 2026-08-22 for
+    # transformers==4.51.0 + deepspeed==0.19.3, the internvla_n1_unified
+    # venv), `transformers.modeling_utils` conditionally does `import
+    # deepspeed` partway through its own module body; deepspeed's
+    # `runtime/hybrid_engine.py` in turn eagerly reaches into
+    # `transformers.models.opt.modeling_opt`, which needs
+    # `transformers.modeling_utils.PreTrainedModel` -- but that module is
+    # still mid-import at that point, so the attribute doesn't exist yet
+    # ("cannot import name 'PreTrainedModel' from partially initialized
+    # module ... most likely due to a circular import"). Importing deepspeed
+    # first, before anything ever imports transformers, sidesteps the whole
+    # cycle: transformers.models.opt.modeling_opt then always sees a fully
+    # initialized transformers.modeling_utils. Harmless no-op for
+    # combinations that don't hit this bug (confirmed for Gemma4's
+    # transformers==5.12.1 + deepspeed==0.19.3 pairing, which already
+    # trained successfully without this import ever being reordered).
+    import deepspeed  # noqa: F401
+except ImportError:
+    pass
+
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 
@@ -237,13 +259,31 @@ def main() -> int:
     model_cfg = cfg["model"]
     method = str(cfg["method"])
     freeze_prefixes = set(model_cfg.get("freeze_prefixes", []))
+    # This method's frozen-prefix contract is per-model (each adapter's
+    # modality encoder/projector module names differ -- Gemma4's are
+    # model.embed_vision/model.embed_audio, NaVILA's are
+    # vision_tower/mm_projector, etc.), so the required set is read from the
+    # model config itself rather than hardcoded here. The model config
+    # declares full_text_backbone_freeze_prefixes as a value SEPARATE from
+    # freeze_prefixes specifically so this stays a real self-check: someone
+    # editing freeze_prefixes without updating the twin field fails closed
+    # here instead of silently changing what full_text_backbone trains.
+    # Corrected 2026-08-21 for Gemma4 by actually loading the pinned
+    # google/gemma-4-12B-it checkpoint with transformers==5.12.1 and
+    # inspecting named_parameters(): the real Gemma4UnifiedModel class has no
+    # "model.vision_tower" or "model.vision_embedder"/"model.audio_tower"
+    # submodule at all -- the checkpoint's on-disk "model.vision_embedder.*"
+    # tensors are silently dropped as unused by from_pretrained. The only
+    # top-level submodules that actually exist are model.language_model,
+    # model.embed_vision (a small projector), and model.embed_audio. See
+    # configs/models/gemma4.yaml for the full investigation notes.
     if method == "full_text_backbone":
-        required = {
-            "model.vision_tower",
-            "model.embed_vision",
-            "model.audio_tower",
-            "model.embed_audio",
-        }
+        required = set(model_cfg.get("full_text_backbone_freeze_prefixes") or [])
+        if not required:
+            raise ValueError(
+                f"{model_cfg.get('name', 'model')} config must declare "
+                "full_text_backbone_freeze_prefixes for the full_text_backbone method contract"
+            )
         missing = sorted(required - freeze_prefixes)
         unexpected = sorted(freeze_prefixes - required)
         if missing or unexpected:
@@ -253,24 +293,20 @@ def main() -> int:
             )
     elif method == "full_all_active":
         unexpected_vision_freeze = sorted(
-            {"model.vision_tower", "model.embed_vision"} & freeze_prefixes
+            {"model.embed_vision"} & freeze_prefixes
         )
         if unexpected_vision_freeze:
             raise ValueError(
                 "full_all_active must train the complete vision path; frozen prefixes="
                 f"{unexpected_vision_freeze}; use configs/models/gemma4_all_active.yaml"
             )
-        missing_audio_freeze = sorted(
-            {"model.audio_tower", "model.embed_audio"} - freeze_prefixes
-        )
+        missing_audio_freeze = sorted({"model.embed_audio"} - freeze_prefixes)
         if missing_audio_freeze:
             raise ValueError(
                 "full_all_active requires the complete unused audio path to be frozen; "
                 f"missing freeze_prefixes={missing_audio_freeze}"
             )
-        unexpected_freeze = sorted(
-            freeze_prefixes - {"model.audio_tower", "model.embed_audio"}
-        )
+        unexpected_freeze = sorted(freeze_prefixes - {"model.embed_audio"})
         if unexpected_freeze:
             raise ValueError(
                 "full_all_active has unexpected frozen prefixes: "
@@ -279,10 +315,16 @@ def main() -> int:
     elif method == "lora":
         if not isinstance(model_cfg.get("target_modules"), str):
             raise ValueError(
-                "Gemma 4 LoRA target_modules must be a full-path regex, not suffix names"
+                f"{model_cfg.get('name', 'model')} LoRA target_modules must be a full-path "
+                "regex, not suffix names"
             )
-        if model_cfg.get("lora_trainable_path_fragment") != ".language_model.":
-            raise ValueError("Gemma 4 LoRA must be restricted to the language backbone")
+        fragment = model_cfg.get("lora_trainable_path_fragment")
+        if not isinstance(fragment, str) or not fragment:
+            raise ValueError(
+                f"{model_cfg.get('name', 'model')} config must declare a non-empty "
+                "lora_trainable_path_fragment so inserted adapters can be checked against the "
+                "declared language backbone below"
+            )
 
     tag = f"{model_cfg['name']}__{cfg['method']}__{ablation}__seed{args.seed}"
     output_dir = project_path(args.output_dir) if args.output_dir else output_root / tag
@@ -366,7 +408,22 @@ def main() -> int:
     # HfTrainerDeepSpeedConfig path resolves every DeepSpeed "auto" field,
     # establishes the distributed weakref, and activates zero.Init before the
     # 12B model is materialized. Keeping training_args alive keeps that state.
-    training_args = TrainingArguments(
+    #
+    # This project now spans multiple per-model venvs with different pinned
+    # transformers versions (5.12.1 for Gemma4, 4.37.2 for NaVILA -- see
+    # requirements-runpod.txt vs requirements-navila.txt), and
+    # TrainingArguments' own kwarg names/availability have moved between
+    # them: 4.37.2 still calls the eval-cadence arg evaluation_strategy (not
+    # eval_strategy) and has no restore_callback_states_from_checkpoint at
+    # all. Rather than hardcode one version's argument names, introspect the
+    # installed TrainingArguments and adapt -- confirmed 2026-08-22 by
+    # actually diffing inspect.signature(TrainingArguments.__init__) between
+    # both venvs, not by trusting a changelog.
+    import inspect
+
+    training_arguments_params = set(inspect.signature(TrainingArguments.__init__).parameters)
+    eval_strategy_kwarg = "eval_strategy" if "eval_strategy" in training_arguments_params else "evaluation_strategy"
+    training_args_kwargs: dict[str, Any] = dict(
         output_dir=str(output_dir),
         num_train_epochs=float(train_cfg["num_train_epochs"]),
         max_steps=args.max_steps,
@@ -384,7 +441,6 @@ def main() -> int:
         gradient_checkpointing=bool(train_cfg.get("gradient_checkpointing", True)),
         gradient_checkpointing_kwargs={"use_reentrant": False},
         logging_steps=int(train_cfg["logging_steps"]),
-        eval_strategy=train_cfg["eval_strategy"],
         eval_steps=eval_steps,
         save_strategy=train_cfg["save_strategy"],
         save_steps=save_steps,
@@ -407,8 +463,11 @@ def main() -> int:
         data_seed=args.seed,
         remove_unused_columns=False,
         ddp_find_unused_parameters=False,
-        restore_callback_states_from_checkpoint=True,
     )
+    training_args_kwargs[eval_strategy_kwarg] = train_cfg["eval_strategy"]
+    if "restore_callback_states_from_checkpoint" in training_arguments_params:
+        training_args_kwargs["restore_callback_states_from_checkpoint"] = True
+    training_args = TrainingArguments(**training_args_kwargs)
     resume_checkpoint = resolve_resume(output_dir, args.resume)
     if isinstance(resume_checkpoint, str):
         checkpoint_parent = Path(resume_checkpoint).resolve().parent
@@ -590,19 +649,40 @@ def main() -> int:
     if rank == 0:
         atomic_json(output_dir / "run_manifest.json", run_manifest)
 
+    # Same cross-venv transformers-version drift as the TrainingArguments
+    # kwargs above: 4.37.2's Trainer.__init__ still takes tokenizer=, not
+    # processing_class= (renamed in a later transformers release).
+    trainer_params = set(inspect.signature(Trainer.__init__).parameters)
+    processor_kwarg = "processing_class" if "processing_class" in trainer_params else "tokenizer"
     trainer = Trainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=val_dataset,
         data_collator=collator,
-        processing_class=processor,
+        **{processor_kwarg: processor},
     )
     try:
         result = trainer.train(resume_from_checkpoint=resume_checkpoint)
         trainer.save_model(str(output_dir / "final"))
         trainer.save_state()
         if trainer.is_world_process_zero():
+            # Trainer.save_model() only writes config.json through its
+            # PreTrainedModel special-casing; a bare nn.Module wrapper (e.g.
+            # InternVLAN1TextWrapper, used to bypass a backbone's broken
+            # labels-triggered loss branch -- see models/registry.py) isn't
+            # recognized by that check and silently falls back to a raw
+            # state_dict dump with no config.json at all. Confirmed missing
+            # 2026-08-23 on a completed internvla_n1 run, which broke
+            # predict_labels.py's from_pretrained() deep inside generation
+            # (AttributeError on a config field the base checkpoint has but
+            # the fallback save path drops). Write it explicitly whenever
+            # the wrapped model exposes a HF config, regardless of whether
+            # Trainer's own path already wrote one.
+            final_config_path = output_dir / "final" / "config.json"
+            model_config = getattr(trainer.model, "config", None)
+            if model_config is not None and hasattr(model_config, "to_json_file"):
+                model_config.to_json_file(str(final_config_path))
             processor.save_pretrained(output_dir / "final")
             atomic_json(output_dir / "train_metrics.json", result.metrics)
             run_manifest["status"] = "complete"

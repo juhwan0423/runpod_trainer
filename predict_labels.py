@@ -12,6 +12,18 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+try:
+    # Import order workaround -- see train.py for the full explanation.
+    # transformers.modeling_utils can conditionally `import deepspeed`
+    # mid-module for some transformers/deepspeed pairings (confirmed for
+    # transformers==4.51.0 + deepspeed==0.19.3, the internvla_n1_unified
+    # venv), which circles back into transformers.models.opt.modeling_opt
+    # before PreTrainedModel is defined. Importing deepspeed first sidesteps
+    # the cycle; harmless no-op for environments that don't hit this bug.
+    import deepspeed  # noqa: F401
+except ImportError:
+    pass
+
 import torch
 import yaml
 from PIL import Image
@@ -58,7 +70,19 @@ def parse_native_response(processor, generated_ids: torch.Tensor, prefix_ids: to
     raw_with_specials = tokenizer.decode(generated_ids, skip_special_tokens=False)
     parser = getattr(processor, "parse_response", None)
     if parser is None:
-        return raw_with_specials, None, "processor has no parse_response"
+        # Not every model's AutoProcessor implements the newer chat-response
+        # schema mechanism (confirmed 2026-08-24: InternVLA-N1's pinned
+        # transformers==4.51.0 predates it entirely) -- but the model still
+        # generated a real, usable answer. Falling back to native_action=None
+        # here silently turned EVERY InternVLA-N1 prediction into the
+        # judge's "[error] stop" default regardless of what the model
+        # actually said (raw_model_output showed clean, varied, sensible
+        # labels the whole time), making task_completion=0.0 for that model
+        # a pure artifact of this function, not a real model failure. Decode
+        # the same ids with special tokens stripped instead -- the same
+        # fallback predict_labels_navila.py already uses successfully.
+        native_action = tokenizer.decode(generated_ids, skip_special_tokens=True).strip()
+        return raw_with_specials, native_action, None
     try:
         parameters = inspect.signature(parser).parameters
         if "prefix" in parameters:
@@ -67,7 +91,21 @@ def parse_native_response(processor, generated_ids: torch.Tensor, prefix_ids: to
             parsed = parser(raw_with_specials)
         return raw_with_specials, _parsed_content(parsed), None
     except Exception as exc:
-        return raw_with_specials, None, f"{type(exc).__name__}: {exc}"
+        # Same failure mode as the `parser is None` branch above, one level
+        # deeper: the processor DOES expose parse_response, but calling it
+        # raises because this checkpoint's tokenizer carries no
+        # `response_schema` (observed 2026-08-26 on InternVLA-M1:
+        # "AttributeError: This tokenizer does not have a `response_schema`
+        # for parsing chat responses!" on all 12,523 test frames, while
+        # raw_model_output held clean labels like
+        # '[navigate] turn left 15 degree<|im_end|>' throughout). Returning
+        # None here discarded a perfectly good answer and handed the judge
+        # its "[error] stop" default for every frame -- the exact artifact
+        # that made InternVLA-N1 look like a 0.0% model in §9.1. Keep the
+        # error string for diagnostics, but fall back to the plain decode
+        # rather than throwing the model's real output away.
+        native_action = tokenizer.decode(generated_ids, skip_special_tokens=True).strip()
+        return raw_with_specials, native_action, f"{type(exc).__name__}: {exc}"
 
 
 def checkpoint_sha256(checkpoint: Path) -> str:
@@ -119,6 +157,18 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="diagnostic only: accept one canonical substring surrounded by extra text",
     )
+    parser.add_argument(
+        "--device-map",
+        type=str,
+        default=None,
+        help=(
+            "passed through to the adapter's from_pretrained (e.g. 'auto' to "
+            "spread a single checkpoint across multiple idle GPUs for "
+            "inference-only runs where the checkpoint does not fit one GPU). "
+            "When set, the top-level model.cuda() call is skipped since "
+            "accelerate has already placed the model's tensors."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -129,21 +179,65 @@ def main() -> int:
     checkpoint_hash = checkpoint_sha256(checkpoint)
     is_lora = (checkpoint / "adapter_config.json").is_file()
     if is_lora:
-        adapter = get_adapter(model_cfg["adapter"], model_cfg)
+        load_cfg = dict(model_cfg)
+        if args.device_map:
+            load_cfg["device_map"] = args.device_map
+        adapter = get_adapter(load_cfg["adapter"], load_cfg)
         model, processor = adapter.load()
         from peft import PeftModel
-        from transformers import AutoProcessor
 
         model = PeftModel.from_pretrained(model, checkpoint)
-        processor = AutoProcessor.from_pretrained(checkpoint, trust_remote_code=False)
+        try:
+            from transformers import AutoProcessor
+
+            processor = AutoProcessor.from_pretrained(checkpoint, trust_remote_code=False)
+        except OSError:
+            # Not every adapter's processor is a full ProcessorMixin save
+            # under PEFT -- e.g. navila_unified's LoRA checkpoints only ever
+            # write tokenizer files (special_tokens_map.json/tokenizer.json/
+            # tokenizer_config.json), no config.json/preprocessor_config.json,
+            # so AutoProcessor can't identify a processor class from the
+            # checkpoint dir alone. Reuse the base processor adapter.load()
+            # already returned (unchanged by LoRA training), but refresh its
+            # tokenizer from the checkpoint in case training added special
+            # tokens.
+            from transformers import AutoTokenizer
+
+            tokenizer = AutoTokenizer.from_pretrained(checkpoint, trust_remote_code=False)
+            if hasattr(processor, "tokenizer"):
+                processor.tokenizer = tokenizer
+            else:
+                processor = tokenizer
     else:
         load_cfg = dict(model_cfg)
         load_cfg["hf_id"] = str(checkpoint)
+        if args.device_map:
+            load_cfg["device_map"] = args.device_map
         adapter = get_adapter(load_cfg["adapter"], load_cfg)
         model, processor = adapter.load()
     if not torch.cuda.is_available():
         raise RuntimeError("predict_labels.py requires a CUDA GPU")
-    model.eval().cuda()
+    model.eval()
+    if not args.device_map:
+        model.cuda()
+    # --device-map suppresses the model.cuda() above on the assumption that
+    # the adapter honoured cfg["device_map"] and let accelerate place the
+    # weights. Not every adapter reads that key (only internvla_n1_unified
+    # does today), and when one ignores it the model silently stays on CPU:
+    # inference still "works", just ~22s/row instead of ~0.2s, which reads as
+    # a hang rather than an error (observed 2026-08-25 on internvla_m1 --
+    # 2h51m of CPU inference at 0% GPU util before this check existed).
+    # Fail loudly instead of burning GPU-hours on a CPU forward pass.
+    weight_device = next(model.parameters()).device
+    if weight_device.type != "cuda":
+        raise RuntimeError(
+            f"model weights landed on {weight_device}, not CUDA. "
+            f"--device-map={args.device_map!r} was requested but "
+            f"adapter {model_cfg.get('adapter')!r} does not consume "
+            "cfg['device_map'], so model.cuda() was skipped for nothing. "
+            "Either drop --device-map (the model then loads onto one GPU) "
+            "or teach that adapter's load() to pass device_map through."
+        )
     if hasattr(model.config, "use_cache"):
         model.config.use_cache = True
 
@@ -195,7 +289,17 @@ def main() -> int:
                 processor, output[0, input_length:], inputs["input_ids"][0]
             )
             normalized, parse_status = canonical_from_raw(native_action)
-            if parse_error:
+            if parse_error and native_action is None:
+                # Only a parse failure that left us with *nothing* is fatal.
+                # parse_native_response now recovers a plain decode when the
+                # processor's parse_response raises (see its comment), so a
+                # non-None native_action here means we do have the model's
+                # real answer and canonical_from_raw's own verdict is the
+                # honest one. Unconditionally stamping "parse_error" would
+                # discard a cleanly-parsed label just because the fancy
+                # parser errored -- reintroducing the §9.1 artifact through
+                # the back door. parse_error stays recorded in the output
+                # record either way for diagnostics.
                 parse_status = "parse_error"
             accepted = normalized if (
                 parse_status == "exact"

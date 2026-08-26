@@ -7,22 +7,29 @@ dtype: bfloat16
 attn_implementation: sdpa
 trust_remote_code: false
 
-# Keep the unused audio encoder/projector frozen so DDP does not wait for
-# gradients from a branch absent from SAIE samples.  The vision encoder,
-# vision soft-token embedder/projector, and complete language backbone remain
-# trainable.
+# Keep the unused audio projector frozen so DDP does not wait for gradients
+# from a branch absent from SAIE samples.  The vision embedder/projector and
+# complete language backbone remain trainable.
+#
+# Corrected 2026-08-21 by actually loading the pinned checkpoint with
+# transformers==5.12.1 and inspecting named_parameters() (see gemma4.yaml for
+# the full explanation): there is no separate "model.audio_tower" or
+# "model.vision_tower"/"model.vision_embedder" submodule on the real loaded
+# model -- only model.language_model, model.embed_vision, model.embed_audio
+# exist. The old "model.audio_tower" prefix matched zero parameters and made
+# freeze_input_modules raise.
 freeze_prefixes:
-  - model.audio_tower
   - model.embed_audio
 
 target_modules: 'model\.language_model\..*\.(q_proj|k_proj|v_proj|o_proj|gate_proj|up_proj|down_proj)'
 lora_trainable_path_fragment: .language_model.
 
+# See gemma4.yaml for why these numbers come from the real ZeRO-3 training
+# path (ds_numel), not a standalone from_pretrained() script.
 expected_parameter_counts:
-  total: 12211095136
-  trainable: 12089460480
+  total: 11959730176
+  trainable: 11957272576
   frozen_by_prefix:
-    model.audio_tower: 119177056
     model.embed_audio: 2457600
 
 quantization:

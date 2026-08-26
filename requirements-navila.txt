@@ -1,0 +1,29 @@
+# Locked to /home/oem6/NaVILA's own pyproject.toml + environment_setup.sh
+# (audited 2026-08-21). This venv is NOT shared with gemma4_unified or any
+# other adapter in this registry -- NaVILA needs transformers==4.37.2 with
+# its site-packages files monkey-patched (see setup_navila_venv.sh), which
+# is incompatible with the transformers==5.12.1 pin in requirements-runpod.txt.
+torch==2.3.0
+torchvision==0.18.0
+transformers==4.37.2
+tokenizers>=0.15.2
+sentencepiece==0.1.99
+shortuuid
+accelerate==0.27.2
+peft==0.9.0
+bitsandbytes==0.41.0
+pydantic<2,>=1
+numpy==1.26.0
+scikit-learn==1.2.2
+einops==0.6.1
+einops-exts==0.0.4
+timm==0.9.12
+pytorchvideo==0.1.5
+decord==0.6.0
+huggingface-hub
+Pillow
+PyYAML
+psutil
+ninja
+deepspeed==0.9.5
+wandb

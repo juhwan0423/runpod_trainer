@@ -1,0 +1,40 @@
+name: omnivla-original
+hf_id: NHirose/omnivla-original
+# Pinned 2026-08-25 via the HF Hub API's model-info `sha` field.
+revision: e36a84d4923c041149d441f93f3bdb7092bb5f07
+adapter: omnivla_unified
+dtype: bfloat16
+trust_remote_code: true
+
+# See models/registry.py's OmniVLAUnifiedAdapter docstring for the full
+# investigation this config is based on (2026-08-25). Loads the checkpoint's
+# weights into the PLAIN OpenVLAForActionPrediction base class (not the
+# checkpoint's own registered OpenVLAForActionPrediction_MMNv1 subclass),
+# whose forward() already does single-image splice + auto-masked labels +
+# standard CE loss with no modification needed.
+
+# NOT YET VERIFIED against a live named_parameters() dump -- placeholders
+# based on reading modeling_prismatic.py's __init__ source only (vision
+# backbone assigned to self.vision_backbone, LLM to self.language_model).
+# Per this project's repeated lesson, re-verify before trusting for a real
+# training run.
+freeze_prefixes:
+  - vision_backbone
+
+full_text_backbone_freeze_prefixes:
+  - vision_backbone
+
+target_modules: '^language_model\..*\.(q_proj|k_proj|v_proj|o_proj|gate_proj|up_proj|down_proj)$'
+lora_trainable_path_fragment: language_model.
+
+# PLACEHOLDER -- OpenVLA-7B (Vicuna-v1.5-7B + SigLIP+DINOv2 dual vision
+# backbone) public param count is ~7.5B total, vision backbone maybe ~0.6B.
+# Must be replaced with a real measurement before trusting this for training.
+expected_parameter_counts:
+  total: 7500000000
+  trainable: 6900000000
+  frozen_by_prefix:
+    vision_backbone: 600000000
+
+quantization:
+  load_in_4bit: false

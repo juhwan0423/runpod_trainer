@@ -1,0 +1,21 @@
+# B200 (Blackwell, sm_100) variant of requirements-runpod.txt. Blackwell
+# needs a cu128+ wheel index; cu128's latest available torch (2.11.0) pairs
+# with torchvision 0.26.0 (PyTorch's own version-pairing convention), not
+# the 2.12.1/0.27.1 pair pinned for the H100/cu126 recipe. Everything below
+# torch/torchvision is pure-Python and CUDA-index-agnostic, so left
+# identical to requirements-runpod.txt.
+torch==2.11.0
+torchvision==0.26.0
+transformers==5.12.1
+accelerate==1.14.0
+deepspeed==0.19.3
+peft==0.20.0
+bitsandbytes==0.50.0
+huggingface-hub==1.21.0
+safetensors==0.8.0
+Pillow==12.1.0
+PyYAML==6.0.3
+packaging==25.0
+psutil==7.2.2
+ninja==1.13.0
+wandb==0.21.4

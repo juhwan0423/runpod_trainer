@@ -1,0 +1,57 @@
+# InternVLA-N1 venv pins. Curated from /home/oem6/InternNav/requirements/
+# model_requirements.txt (the more complete/recent of that repo's two
+# slightly-divergent requirements files -- internvla_n1.txt vs
+# model_requirements.txt disagree on accelerate/diffusers/flash_attn patch
+# versions; see adapter_implement_plan.md §3.3), trimmed to what this
+# adapter's own code path (direct InternVLAN1ForCausalLM.from_pretrained +
+# AutoProcessor, NOT internnav's own training/inference wrappers) actually
+# imports, verified 2026-08-22 against a working reference venv
+# (/data/oem6/SAIE_runtime_envs/internnav-venv).
+#
+# flash_attn is intentionally NOT pinned here: confirmed empirically that
+# attn_implementation="sdpa" loads and runs a real forward pass fine through
+# this adapter's direct-class-loading path (unlike NaVILA, whose patched
+# modeling_llama.py hard-requires a working flash-attn build regardless of
+# attn_implementation). If flash-attn is later wanted for speed, install
+# flash_attn==2.7.2.post1 (or 2.7.4.post1, both confirmed working in the
+# reference venv) manually and set attn_implementation: flash_attention_2 in
+# configs/models/internvla_n1.yaml -- do not make it a hard requirement
+# without re-verifying, per this project's flash-attn-on-local-A6000 lesson
+# (NaVILA_implementation.md §13).
+transformers==4.51.0
+tokenizers==0.21.2
+accelerate==1.7.0
+diffusers==0.32.2
+safetensors==0.5.3
+huggingface-hub==0.33.4
+einops==0.8.1
+ftfy==6.3.1
+sympy==1.13.1
+qwen-vl-utils
+# InternNav's own package metadata constrains these, but setup installs that
+# checkout editable with --no-deps only after this manifest.  Keep the
+# compatible ranges explicit so a fresh environment does not resolve newer,
+# incompatible releases before InternNav is present.
+numpy>=1.26,<2
+fsspec>=2024.6,<2025
+packaging>=23,<25
+Pillow>=11,<12
+psutil>=5.9.8,<6
+pydantic>=2.11,<2.12
+# Importing InternNav's depth encoder loads encoder/__init__.py, whose
+# resnet_encoders module imports the legacy Gym API even though this text
+# adapter does not instantiate the Habitat navigation environment.
+gym==0.26.2
+gym-notices==0.0.8
+# 4.12 requires NumPy 2 on Python 3.10, conflicting with InternNav's
+# NumPy<2 stack; 4.11 is the newest compatible DepthAnything import path.
+opencv-python-headless==4.11.0.86
+depth-camera-filtering @ git+https://github.com/naokiyokoyama/depth_camera_filtering.git
+diffusion_policy @ git+https://github.com/real-stanford/diffusion_policy.git@5ba07ac6661db573af695b419a7947ecb704690f
+
+# Added on top of InternNav's own pins for this project's training harness
+# (not part of InternNav itself, which has no PEFT/LoRA code -- see
+# adapter_implement_plan.md §3.3).
+peft==0.20.0
+deepspeed==0.19.3
+wandb==0.21.4

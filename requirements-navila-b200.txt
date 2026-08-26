@@ -1,0 +1,30 @@
+# NaVILA runtime for Blackwell. The upstream environment pins torch 2.3,
+# which has no sm_100 kernels; all other package pins match the audited
+# NaVILA environment.
+torch==2.11.0
+torchvision==0.26.0
+transformers==4.37.2
+tokenizers>=0.15.2
+sentencepiece==0.1.99
+shortuuid
+accelerate==0.27.2
+peft==0.9.0
+# Do not install upstream's bitsandbytes==0.41.0 on CUDA 12.8.  This run is
+# not quantized, and that release has no libbitsandbytes_cuda128.so; merely
+# being importable makes PEFT 0.9 probe its broken CUDA backend while
+# constructing ordinary LoRA layers.
+pydantic<2,>=1
+numpy==1.26.0
+scikit-learn==1.2.2
+einops==0.6.1
+einops-exts==0.0.4
+timm==0.9.12
+pytorchvideo==0.1.5
+decord==0.6.0
+huggingface-hub
+Pillow
+PyYAML
+psutil
+ninja
+deepspeed==0.9.5
+wandb

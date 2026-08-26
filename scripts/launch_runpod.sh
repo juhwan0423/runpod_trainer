@@ -27,6 +27,13 @@ REPORT_TO=${SAIE_REPORT_TO:-none}
 HF_HOME=${HF_HOME:-${PERSIST_ROOT}/cache/huggingface}
 TORCH_EXTENSIONS_DIR=${TORCH_EXTENSIONS_DIR:-${PERSIST_ROOT}/cache/torch_extensions}
 export HF_HOME TORCH_EXTENSIONS_DIR
+# $PYTHON is invoked by full path below, never via `source .../activate`, so
+# PATH would otherwise lack $VENV_DIR/bin. DeepSpeed's CPUAdam JIT build
+# shells out to `ninja` by name (not by full path) inside every torchrun
+# worker process, so without this the offload optimizer fails with "Unable
+# to JIT load the cpu_adam op due to ninja not being installed" even though
+# pip installed ninja straight into this venv.
+export PATH="${VENV_DIR}/bin:${PATH}"
 export TOKENIZERS_PARALLELISM=false
 export PYTORCH_CUDA_ALLOC_CONF=${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}
 
