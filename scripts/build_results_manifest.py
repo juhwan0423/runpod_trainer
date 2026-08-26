@@ -362,6 +362,11 @@ def main() -> int:
             "Current judge aggregates do not populate safety_violation_rate_v2. "
             "Verify the paper Table 2 Safety Viol. source before citation."
         ),
+        "known_dataset_provenance_risk": (
+            "The original and balanced dataset_manifest.json files are byte-identical despite "
+            "different train JSONL contents. Identify them by canonical directory, train JSONL "
+            "hash/row count, run directory/global step, and checkpoint hash, not manifest SHA alone."
+        ),
         "experiments": entries,
         "warnings": all_warnings,
     }
