@@ -13,6 +13,7 @@ import argparse
 import csv
 import hashlib
 import json
+import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -155,6 +156,30 @@ def relative_or_absolute(path: Path, workspace: Path) -> str:
         return path.relative_to(workspace).as_posix()
     except ValueError:
         return str(path)
+
+
+def git_metadata(repo: Path) -> dict[str, Any]:
+    def git(*args: str) -> str | None:
+        try:
+            completed = subprocess.run(
+                ["git", "-C", str(repo), *args],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+            )
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            return None
+        return completed.stdout.strip()
+
+    status = git("status", "--porcelain")
+    return {
+        "path": str(repo),
+        "head": git("rev-parse", "HEAD"),
+        "branch": git("branch", "--show-current"),
+        "origin": git("remote", "get-url", "origin"),
+        "dirty": None if status is None else bool(status),
+    }
 
 
 def build_entry(spec: Experiment, workspace: Path) -> tuple[dict[str, Any], list[str]]:
@@ -322,6 +347,7 @@ def main() -> int:
         "schema_version": "saie_experiment_registry_v1",
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "workspace_root": str(workspace),
+        "code": git_metadata(workspace / "runpod_trainer"),
         "identity_policy": (
             "directory + dataset manifest hash + checkpoint hash; never trust historical run tag alone"
         ),
