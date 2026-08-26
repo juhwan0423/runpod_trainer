@@ -4,7 +4,7 @@
 Why this exists
 ---------------
 The paper's Table 2 reports four columns: Category Acc., Task Comp., Nav. Dev.,
-Safety Viol. Auditing this session's 15 scored SFT runs showed that three of
+Safety Viol. Auditing this session's registered scored SFT runs showed that three of
 those four are not usable as reported for the SFT results:
 
 * **Category Acc. (= judge tool_accuracy) does not discriminate inside
@@ -15,7 +15,7 @@ those four are not usable as reported for the SFT results:
 * **Nav. Dev. is ~0 for nearly every frame.** In ``_gemma4_lora_eval`` only 268
   of 10,646 mismatched predictions (2.5%) carry a nonzero deviation --
   predicting "turn right 15" when the gold is "turn left 30" scores 0.0.
-* **Safety Viol. (v2) is undefined.** All 15 runs report
+* **Safety Viol. (v2) is undefined.** All registered runs report
   ``safety_v2_risk_adjacent_pooled.n_risky_frames == 0``, so the pooled rate is
   ``None`` on every one.
 
@@ -59,10 +59,12 @@ RUN_LABELS = {
     "_navila_eval": ("NaVILA", "FFT", "불균형"),
     "_navila_lora_eval": ("NaVILA", "LoRA", "불균형"),
     "_navila_lora_balanced_eval": ("NaVILA", "LoRA", "밸런스"),
+    "_navila_lora_redesigned_eval": ("NaVILA", "LoRA", "재설계 s0"),
     "_navila_fft_balanced_eval": ("NaVILA", "FFT", "밸런스"),
     "_internvla_n1_fft_fixed_eval": ("InternVLA-N1", "FFT", "불균형"),
     "_internvla_n1_lora_unbalanced_eval": ("InternVLA-N1", "LoRA", "불균형"),
     "_internvla_n1_lora_fixed_eval": ("InternVLA-N1", "LoRA", "밸런스"),
+    "_internvla_n1_lora_redesigned_eval": ("InternVLA-N1", "LoRA", "재설계 s0"),
     "_internvla_m1_lora_unbalanced_eval": ("InternVLA-M1", "LoRA", "불균형"),
     "_internvla_m1_lora_balanced_eval": ("InternVLA-M1", "LoRA", "밸런스"),
     "_internvla_m1_fft_balanced_eval": ("InternVLA-M1", "FFT", "밸런스"),
@@ -172,7 +174,7 @@ def render(rows: list[dict]) -> str:
     out.append(
         "\n> ⚠️ **아래 SFT 결과와 직접 비교 금지.** 이번 세션의 채점에서는 "
         "`Nav. Dev.`가 오답의 97.5%에서 0.0으로 나오고, `Safety Viol.`(v2)은 "
-        "15개 결과셋 전부 `n_risky_frames=0`이라 값 자체가 `None`이다. 두 열은 "
+        "등록 결과셋 전부 `n_risky_frames=0`이라 값 자체가 `None`이다. 두 열은 "
         "SFT 쪽에서 재현되지 않으므로, 같은 축에 올리려면 채점 설정 차이부터 "
         "규명해야 한다(§9.6).\n"
     )

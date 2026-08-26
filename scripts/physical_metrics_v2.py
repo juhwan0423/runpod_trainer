@@ -3,7 +3,7 @@
 
 Why the reported columns are unusable
 -------------------------------------
-Auditing all 16 scored runs in /data/oem4 produced three concrete defects:
+The initial 16-run audit in /data/oem4 produced three concrete defects:
 
 1. ``safety_v2_risk_adjacent_pooled`` is **always** ``{n_risky_frames: 0,
    pooled_violation_rate: None}``. Cause: ``aggregate_saie_scores.py`` reads
@@ -18,10 +18,10 @@ Auditing all 16 scored runs in /data/oem4 produced three concrete defects:
    that lands (``hypothetical_position``); turn and stop actions leave the
    position unchanged, and in V1 the robot is auto-driven along the GT path,
    so a non-moving prediction is by construction 0.0m off-path and inside no
-   clearance zone. Measured across the 16 runs, the correlation between a
+   clearance zone. In that 16-run audit, the correlation between a
    model's forward-prediction rate and both metrics is **0.9963**, and 11 of
-   16 runs predict forward 0.00% of the time -- scoring a *perfect* physical
-   safety result while being maximally wrong semantically (the single largest
+   those 16 runs predicted forward 0.00% of the time -- scoring a *perfect*
+   physical safety result while being maximally wrong semantically (the single largest
    gold label is ``[navigate] move forward 75 cm``, 2,273 of 12,603 frames).
 
 What this script computes instead
