@@ -1,23 +1,42 @@
 # SAIE RunPod Trainer
 
-SAIE/IndustSim-Quad의 14-label industrial patrol policy를 Gemma 4 기반 VLM으로
-supervised fine-tuning하고, 예측·진단 평가까지 수행하기 위한 독립 RunPod 학습
-harness입니다.
+IndustSim-Quad(SAIE) 산업 순찰 벤치마크의 14-label 행동 예측을 VLM/VLA 4종으로
+supervised fine-tuning하고, 예측과 평가까지 수행하는 RunPod 학습 파이프라인입니다.
 
-이 저장소의 현재 범위는 다음과 같습니다.
+| 모델 | Full fine-tuning | LoRA | 비고 |
+|---|:---:|:---:|---|
+| Gemma 4 12B | ✓ | ✓ | DeepSpeed ZeRO-3, BF16 |
+| NaVILA (LLaMA3 8B) | ✓ | ✓ | DeepSpeed ZeRO-2, H100 4장 |
+| InternVLA-N1 | ✓ | ✓ | InternNav 기반 |
+| InternVLA-M1 | ✓ | ✓ | |
+| OmniVLA | – | – | adapter 코드는 있으나 의존성 충돌로 학습하지 못함 |
 
-- `google/gemma-4-12B-it` multimodal SFT
-- BF16 + DeepSpeed ZeRO-3 optimizer offload
-- text-backbone full training, vision+text all-active training, 개발용 LoRA
-- warehouse 단위 split과 portable image path를 갖는 `saie_sft_v2` 변환
-- strict annotation/data/preflight audit
-- exact 14-label prediction과 분류 진단
-- upstream SAIE judge용 episode prediction export/집계
-- RunPod H100 setup, smoke, resume-smoke, full launch
+구성 요소는 다음과 같습니다.
 
-> **중요:** 이것은 아직 범용 VLA trainer가 아닙니다. NaVILA, OmniVLA,
-> InternVLA-M1은 서로 다른 upstream input/action interface가 필요하며 native adapter가
-> 이 저장소에 구현되어 있지 않습니다. 현재 직접 학습 가능한 backbone은 Gemma 4입니다.
+- 모델별 adapter와 freeze/LoRA 규칙: [`models/registry.py`](./models/registry.py), [`configs/models/`](./configs/models/)
+- warehouse 단위 split의 SFT 데이터 생성, annotation audit, preflight
+- RunPod H100/B200 환경 설치와 smoke, resume, full 실행 스크립트
+- 에피소드 단위 분산 평가, 결과 registry(체크포인트·예측 해시 연결), paired bootstrap 비교
+
+## 결과 요약
+
+같은 11개 warehouse, 210개 평가 에피소드에서 유효한 실험 19개를 비교했습니다.
+`task-stop`은 이동을 제외한 4개 과제(경보, 게이지, 개수, 상태)의 정확도로, 항상
+"이동"만 답하는 모델은 0점을 받습니다.
+
+| 모델 | 방법 | 학습 데이터 | Task completion | task-stop |
+|---|---|---|---:|---:|
+| InternVLA-M1 | Full FT | balanced | **0.748** | **0.634** |
+| InternVLA-N1 | LoRA | balanced | 0.733 | 0.597 |
+| Gemma 4 | LoRA | redesigned (seed 0) | 0.687 | 0.515 |
+| NaVILA | Full FT | balanced | 0.647 | 0.488 |
+
+- Full fine-tuning이 Gemma 4와 InternVLA-N1에서는 한 가지 답만 내는 상태로 붕괴했지만,
+  NaVILA와 InternVLA-M1에서는 붕괴하지 않았습니다. LoRA와 Full FT의 우열은 모델마다 달랐습니다.
+- 기존 지표 일부는 변별력이 없었습니다. `Category Acc.`는 `[navigate]` 태그만 맞으면
+  정답으로 세어 0.83–0.89에 몰렸고, 같은 프레임의 완전일치 정확도는 0.09–0.34였습니다.
+- 전체 19개 결과와 카테고리별 분해는 `scripts/build_table2.py`,
+  `scripts/category_breakdown.py`로 다시 만들 수 있습니다.
 
 ## 공개 저장소에 포함되지 않는 것
 
@@ -41,10 +60,11 @@ harness입니다.
 | config/data/train dry-run | 지원 |
 | RunPod H100 preflight | 지원 |
 | single-H100 ZeRO-3 smoke/resume scripts | 지원 |
-| 실제 H100 end-to-end 2-step 실행 | 아직 이 repository snapshot에서는 미검증 |
+| 실제 H100 end-to-end 실행 | 검증됨 (2026-08) |
 | paper-ready corpus | 포함하지 않음 |
 | ICRA scientific annotation | schema/gate 지원, 실제 완성 corpus는 포함하지 않음 |
-| NaVILA/OmniVLA/InternVLA-M1 training | 미구현 |
+| NaVILA, InternVLA-N1, InternVLA-M1 학습 | 지원 |
+| OmniVLA 학습 | 의존성 충돌로 미완 |
 
 현재 개발용 데이터가 `benchmark_ready=false` 또는
 `icra_scientific_ready=false`인 것은 launcher 오류가 아닙니다. full run은 의도적으로
