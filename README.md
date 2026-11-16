@@ -1,102 +1,63 @@
 # SAIE RunPod Trainer
 
-IndustSim-Quad(SAIE) 산업 순찰 벤치마크의 14-label 행동 예측을 VLM/VLA 4종으로
-supervised fine-tuning하고, 예측과 평가까지 수행하는 RunPod 학습 파이프라인입니다.
+A fine-tuning and evaluation pipeline for the IndustSim-Quad (SAIE) industrial patrol benchmark. It fine-tunes four VLM/VLA models on the benchmark's 14-label action task, generates predictions and scores them.
 
-| 모델 | Full fine-tuning | LoRA | 비고 |
+| Model | Full fine-tuning | LoRA | Setup |
 |---|:---:|:---:|---|
 | Gemma 4 12B | ✓ | ✓ | DeepSpeed ZeRO-3, BF16 |
-| NaVILA (LLaMA3 8B) | ✓ | ✓ | DeepSpeed ZeRO-2, H100 4장 |
-| InternVLA-N1 | ✓ | ✓ | InternNav 기반 |
+| NaVILA (LLaMA3 8B) | ✓ | ✓ | DeepSpeed ZeRO-2, 4× H100 |
+| InternVLA-N1 | ✓ | ✓ | Built on InternNav |
 | InternVLA-M1 | ✓ | ✓ | |
-| OmniVLA | – | – | adapter 코드는 있으나 의존성 충돌로 학습하지 못함 |
 
-## 목적
+## Purpose
 
-IndustSim-Quad 벤치마크에서 기존 VLA들은 zero-shot으로 과제를 거의 수행하지 못했습니다.
-이 학습은 그 원인이 데이터에 있는지 모델에 있는지 가리기 위한 것입니다.
+Existing VLAs scored close to zero on IndustSim-Quad without training. This study asks whether the cause lies in the data or in the models.
 
-- **벤치마크 데이터에 학습 신호가 있는가.** 모델마다 따로 튜닝하지 않고, 네 모델에 같은
-  표준 레시피(Full fine-tuning, LoRA)를 적용해 성능이 오르는지 확인합니다.
-- **사전학습의 종류가 결과를 바꾸는가.** 보행 내비게이션 VLA(NaVILA), 내비게이션 VLA
-  (InternVLA-N1), 범용 VLA(InternVLA-M1), 로봇 사전학습이 없는 VLM(Gemma 4)을 비교합니다.
-- **평가 지표가 실제 능력을 재는가.** 학습된 모델의 예측을 카테고리별로 나눠 기존 지표가
-  무엇을 놓치는지 점검합니다.
+- **Does the benchmark data carry a learning signal?** All four models get the same standard recipe (full fine-tuning and LoRA), with no per-model tuning.
+- **Does the kind of pretraining change the result?** The models are a legged-navigation VLA (NaVILA), a navigation VLA (InternVLA-N1), a general VLA (InternVLA-M1) and a VLM with no robot pretraining (Gemma 4).
+- **Do the metrics measure the ability they claim to?** Predictions of the trained models are broken down by category and compared with the existing metrics.
 
-구성 요소는 다음과 같습니다.
+## Results
 
-- 모델별 adapter와 freeze/LoRA 규칙: [`models/registry.py`](./models/registry.py), [`configs/models/`](./configs/models/)
-- warehouse 단위 split의 SFT 데이터 생성, annotation audit, preflight
-- RunPod H100/B200 환경 설치와 smoke, resume, full 실행 스크립트
-- 에피소드 단위 분산 평가, 결과 registry(체크포인트·예측 해시 연결), paired bootstrap 비교
+19 runs are compared on the same 11 test warehouses and 210 evaluation episodes. `task-stop` is the accuracy on the four inspection tasks (alert, gauge, count, state); a model that always answers "navigate" scores 0.
 
-## 결과 요약
-
-같은 11개 warehouse, 210개 평가 에피소드에서 유효한 실험 19개를 비교했습니다.
-`task-stop`은 이동을 제외한 4개 과제(경보, 게이지, 개수, 상태)의 정확도로, 항상
-"이동"만 답하는 모델은 0점을 받습니다.
-
-| 모델 | 방법 | 학습 데이터 | Task completion | task-stop |
+| Model | Method | Training data | Task completion | task-stop |
 |---|---|---|---:|---:|
 | InternVLA-M1 | Full FT | balanced | **0.748** | **0.634** |
 | InternVLA-N1 | LoRA | balanced | 0.733 | 0.597 |
 | Gemma 4 | LoRA | redesigned (seed 0) | 0.687 | 0.515 |
 | NaVILA | Full FT | balanced | 0.647 | 0.488 |
 
-- Full fine-tuning이 Gemma 4와 InternVLA-N1에서는 거의 한 가지 답만 내는 상태로 붕괴했지만,
-  NaVILA와 InternVLA-M1에서는 붕괴하지 않았습니다. LoRA와 Full FT의 우열은 모델마다 달랐습니다.
-- 기존 지표 일부는 변별력이 없었습니다. 이동 프레임에서 `[navigate]` 태그만 맞으면 정답으로
-  세는 지표는 0.84–0.97이었지만, 같은 프레임의 완전일치 정확도는 0.09–0.34였습니다.
-- 전체 19개 결과와 카테고리별 분해는 `scripts/build_table2.py`,
-  `scripts/category_breakdown.py`로 다시 만들 수 있습니다.
+- Full fine-tuning collapsed to near-constant outputs on Gemma 4 and InternVLA-N1 and stayed stable on NaVILA and InternVLA-M1. Which of LoRA and full fine-tuning is better depends on the model.
+- On navigation frames, a metric that matches only the `[navigate]` tag gives 0.84–0.97, while exact-match accuracy on the same frames is 0.09–0.34.
+- `scripts/build_table2.py` and `scripts/category_breakdown.py` rebuild the full table of 19 runs and the per-category breakdown.
 
-## Repository 구조
+## Repository
 
 ```text
 .
-├── train.py                       # Gemma 4 multimodal SFT
-├── predict_labels.py              # strict 14-label generation
-├── evaluate_predictions.py        # classification/balance diagnostics
-├── aggregate_saie_scores.py       # warehouse-qualified judge aggregation
-├── annotation_audit.py            # non-destructive raw annotation audit
-├── data/
-│   ├── schema.py                  # canonical labels and prompt
-│   ├── build_sft_dataset.py       # raw SAIE -> saie_sft_v2
-│   └── dataset.py                 # image loader and target-only collator
-├── models/registry.py             # Gemma 4 loading/freeze/LoRA contract
-├── configs/
-│   ├── base.yaml
-│   ├── models/
-│   ├── methods/
-│   ├── deepspeed/
-│   └── splits/
-├── scripts/
-│   ├── setup_runpod.sh
-│   ├── preflight.py
-│   ├── launch_runpod.sh
-│   ├── evaluate_saie_judge.sh
-│   └── make_runpod_bundle.sh
-├── tests/
-├── ANNOTATION_AUDIT.md
-└── 가이드.md                       # 상세 한국어 운영 가이드
+├── train.py                       # multimodal supervised fine-tuning
+├── predict_labels.py              # 14-label generation
+├── predict_labels_navila.py       # NaVILA prediction path
+├── evaluate_predictions.py        # classification and balance diagnostics
+├── aggregate_saie_scores.py       # per-warehouse judge aggregation
+├── annotation_audit.py            # raw annotation audit
+├── data/                          # labels, prompt, SFT dataset builder, loader
+├── models/registry.py             # per-model adapters, freeze and LoRA rules
+├── configs/                       # models, methods, DeepSpeed, splits
+├── scripts/                       # RunPod setup and launch, sharded evaluation, result registry, analysis
+└── tests/
 ```
 
-## 요구 환경
+## Requirements
 
-- Linux
-- Python 3.12 권장
-- CUDA-capable NVIDIA GPU
-- full training: H100 80 GB 이상과 충분한 host RAM/disk
-- gated model을 읽을 수 있는 Hugging Face token
-- raw SAIE warehouse corpus
+- Linux, Python 3.12, CUDA GPU (full training: H100 80 GB or larger)
+- A Hugging Face token with access to the gated models
+- The raw SAIE warehouse corpus
 
-RunPod dependency는 [`requirements-runpod.txt`](./requirements-runpod.txt)에 exact pin되어
-있습니다. 기본 single-H100 recipe는 CPU optimizer offload 때문에 host RAM과 disk를 많이
-사용합니다. 실제 요구량과 사전 점검은 [`가이드.md`](./가이드.md)를 따르십시오.
+Pinned dependencies are in `requirements-*.txt`. The single-H100 recipe offloads the optimizer to CPU, so it needs ample host RAM and disk.
 
-## 데이터 구조
-
-Builder는 다음 raw layout을 기대합니다.
+## Data layout
 
 ```text
 <SAIE_RAW_ROOT>/
@@ -108,27 +69,19 @@ Builder는 다음 raw layout을 기대합니다.
         └── spot_cam/rgb_XXXX.png
 ```
 
-paper run은 warehouse 단위 split manifest를 사용합니다. 형식은
-`configs/splits/paper_59_11.example.json`을 참고해 59/11 목록으로 작성합니다.
-데이터와 모델 가중치는 별도로 준비합니다.
+Paper runs use a warehouse-level split manifest (59 training and 11 test warehouses). `configs/splits/paper_59_11.example.json` shows the format.
 
-## 1. Clone 및 RunPod 환경 설치
+## 1. Set up RunPod
 
 ```bash
 git clone https://github.com/juhwan0423/runpod_trainer.git
 cd runpod_trainer
-
 bash scripts/setup_runpod.sh
 source /workspace/venvs/saie-ft/bin/activate
-```
-
-`HF_TOKEN`은 shell 환경변수나 RunPod secret으로 전달합니다.
-
-```bash
 export HF_TOKEN='...'
 ```
 
-## 2. Annotation audit
+## 2. Audit the annotations
 
 ```bash
 export SAIE_RAW_ROOT=/workspace/raw
@@ -141,10 +94,7 @@ python annotation_audit.py \
   --publication-strict
 ```
 
-audit은 원본을 읽기만 합니다. `--publication-strict`에서 실패하면 exporter와 source data를
-먼저 고칩니다.
-
-## 3. SFT 데이터 생성
+## 3. Build the SFT dataset
 
 ```bash
 export SAIE_SFT_ROOT=/workspace/data/sft
@@ -159,11 +109,7 @@ python data/build_sft_dataset.py \
   --duplicate-policy error
 ```
 
-출력은 `<out>/<ablation>/{train,val,test}.jsonl`, `dataset_manifest.json`,
-`repair_log.jsonl`입니다. 기본 학습 입력은 current `spot_cam` image 한 장과 mission이며,
-target은 exact canonical label 하나입니다.
-
-개발 smoke corpus는 서로 다른 warehouse가 최소 3개여야 합니다.
+This writes `<out>/<ablation>/{train,val,test}.jsonl` and a dataset manifest. Each example is the current `spot_cam` image with the mission text, and the target is one canonical label.
 
 ## 4. Preflight
 
@@ -183,10 +129,7 @@ python scripts/preflight.py \
   --check-processor-contract
 ```
 
-full paper run 전에는 `--require-paper-ready`를 추가합니다. 확장 scientific annotation을
-사용하는 실험은 `--require-icra-ready`도 추가합니다.
-
-## 5. H100 smoke와 full training
+## 5. Train
 
 ```bash
 bash scripts/launch_runpod.sh smoke 0
@@ -194,30 +137,17 @@ bash scripts/launch_runpod.sh smoke-resume 0
 bash scripts/launch_runpod.sh full 0
 ```
 
-기본 조합은 다음과 같습니다.
-
-- model: `configs/models/gemma4.yaml`
-- method: `configs/methods/full_ft.yaml`
-- 실제 optimization scope: `full_text_backbone`
-- frozen: complete vision/audio towers와 input embedders/projectors
-
-`full_ft.yaml`은 text backbone 전체를 학습합니다. vision+text active parameter까지
-학습하려면 smoke 검증 뒤 두 설정을 함께 바꿉니다.
+The default is Gemma 4 with `configs/methods/full_ft.yaml`, which trains the whole text backbone and keeps the vision tower frozen. Select another model or method with environment variables:
 
 ```bash
 export SAIE_MODEL_CONFIG=configs/models/gemma4_all_active.yaml
-export SAIE_METHOD_CONFIG=configs/methods/full_all_active.yaml
-bash scripts/launch_runpod.sh smoke-resume 0
+export SAIE_METHOD_CONFIG=configs/methods/full_all_active.yaml   # vision + text
+export SAIE_METHOD_CONFIG=configs/methods/lora_r16.yaml          # LoRA
 ```
 
-LoRA는 개발 비교용입니다.
+NaVILA has its own launcher, `scripts/launch_navila_runpod.sh`, and the `scripts/setup_*_venv.sh` scripts build the environments for NaVILA and InternVLA-N1.
 
-```bash
-export SAIE_METHOD_CONFIG=configs/methods/lora_r16.yaml
-bash scripts/launch_runpod.sh smoke 0
-```
-
-## 6. Prediction과 label 평가
+## 6. Predict and evaluate
 
 ```bash
 python predict_labels.py \
@@ -235,43 +165,18 @@ python evaluate_predictions.py \
   --out /workspace/saie-runs/predictions/metrics.json
 ```
 
-SAIE의 four-metric judge 실행에는 upstream repository가 별도로 필요합니다.
+`scripts/evaluate_saie_judge.sh` runs the benchmark's four-metric judge per warehouse and aggregates the scores.
 
-```bash
-git clone https://github.com/SeanJeonghwanLee/SAIE.git /workspace/SAIE-eval
-```
-
-warehouse별 judge 실행과 집계는 `scripts/evaluate_saie_judge.sh`와 상세 가이드를
-참조하십시오.
-
-## 7. 로컬 검증
+## 7. Local checks
 
 ```bash
 python -m compileall -q .
 python -m unittest discover -s tests -v
-
-bash -n scripts/setup_runpod.sh
-bash -n scripts/launch_runpod.sh
-bash -n scripts/make_runpod_bundle.sh
-bash -n scripts/evaluate_saie_judge.sh
 ```
 
-모델 download, processor contract, CUDA/H100, DeepSpeed runtime 검사는 실제 RunPod
-preflight에서 수행합니다.
+## Documents
 
-## Code bundle 생성
-
-```bash
-bash scripts/make_runpod_bundle.sh
-cd dist
-sha256sum -c saie-finetuning-code_*.tar.gz.sha256
-```
-
-bundle script는 실행 코드 allowlist만 archive합니다.
-
-## 문서
-
-- [`가이드.md`](./가이드.md): 전체 한국어 운영·RunPod·평가 가이드
-- [`ANNOTATION_AUDIT.md`](./ANNOTATION_AUDIT.md): annotation audit 계약
-- [`configs/data_format_decision.md`](./configs/data_format_decision.md): data/prompt/split 결정
-- [`configs/README.md`](./configs/README.md): 실행 config map
+- [`ANNOTATION_AUDIT.md`](./ANNOTATION_AUDIT.md): what the annotation audit checks
+- [`configs/README.md`](./configs/README.md): map of the run configurations
+- [`configs/data_format_decision.md`](./configs/data_format_decision.md): data, prompt and split decisions
+- [`가이드.md`](./가이드.md): full operations guide (Korean)
