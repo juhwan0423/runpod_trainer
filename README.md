@@ -11,6 +11,18 @@ supervised fine-tuning하고, 예측과 평가까지 수행하는 RunPod 학습 
 | InternVLA-M1 | ✓ | ✓ | |
 | OmniVLA | – | – | adapter 코드는 있으나 의존성 충돌로 학습하지 못함 |
 
+## 목적
+
+IndustSim-Quad 벤치마크에서 기존 VLA들은 zero-shot으로 과제를 거의 수행하지 못했습니다.
+이 학습은 그 원인이 데이터에 있는지 모델에 있는지 가리기 위한 것입니다.
+
+- **벤치마크 데이터에 학습 신호가 있는가.** 모델마다 따로 튜닝하지 않고, 네 모델에 같은
+  표준 레시피(Full fine-tuning, LoRA)를 적용해 성능이 오르는지 확인합니다.
+- **사전학습의 종류가 결과를 바꾸는가.** 보행 내비게이션 VLA(NaVILA), 내비게이션 VLA
+  (InternVLA-N1), 범용 VLA(InternVLA-M1), 로봇 사전학습이 없는 VLM(Gemma 4)을 비교합니다.
+- **평가 지표가 실제 능력을 재는가.** 학습된 모델의 예측을 카테고리별로 나눠 기존 지표가
+  무엇을 놓치는지 점검합니다.
+
 구성 요소는 다음과 같습니다.
 
 - 모델별 adapter와 freeze/LoRA 규칙: [`models/registry.py`](./models/registry.py), [`configs/models/`](./configs/models/)
