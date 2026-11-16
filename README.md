@@ -43,44 +43,12 @@ IndustSim-Quad 벤치마크에서 기존 VLA들은 zero-shot으로 과제를 거
 | Gemma 4 | LoRA | redesigned (seed 0) | 0.687 | 0.515 |
 | NaVILA | Full FT | balanced | 0.647 | 0.488 |
 
-- Full fine-tuning이 Gemma 4와 InternVLA-N1에서는 한 가지 답만 내는 상태로 붕괴했지만,
+- Full fine-tuning이 Gemma 4와 InternVLA-N1에서는 거의 한 가지 답만 내는 상태로 붕괴했지만,
   NaVILA와 InternVLA-M1에서는 붕괴하지 않았습니다. LoRA와 Full FT의 우열은 모델마다 달랐습니다.
-- 기존 지표 일부는 변별력이 없었습니다. `Category Acc.`는 `[navigate]` 태그만 맞으면
-  정답으로 세어 0.83–0.89에 몰렸고, 같은 프레임의 완전일치 정확도는 0.09–0.34였습니다.
+- 기존 지표 일부는 변별력이 없었습니다. 이동 프레임에서 `[navigate]` 태그만 맞으면 정답으로
+  세는 지표는 0.84–0.97이었지만, 같은 프레임의 완전일치 정확도는 0.09–0.34였습니다.
 - 전체 19개 결과와 카테고리별 분해는 `scripts/build_table2.py`,
   `scripts/category_breakdown.py`로 다시 만들 수 있습니다.
-
-## 공개 저장소에 포함되지 않는 것
-
-다음은 의도적으로 포함하지 않습니다.
-
-- SAIE raw images, annotations, maps, simulator output
-- model weights와 checkpoints
-- 실제 59/11 paper split manifest
-- 논문 원고, reviewer 원문, 내부 연구 계획
-- 개인 정보가 포함된 GPU 결제/청구 자료
-- provenance-only legacy prototype
-
-데이터와 model access 권한은 사용자가 별도로 확보해야 합니다. 저장소 공개는 데이터,
-논문, model weight의 재배포 권한을 의미하지 않습니다.
-
-## 현재 상태
-
-| 항목 | 상태 |
-|---|---|
-| standalone unit tests | 지원 |
-| config/data/train dry-run | 지원 |
-| RunPod H100 preflight | 지원 |
-| single-H100 ZeRO-3 smoke/resume scripts | 지원 |
-| 실제 H100 end-to-end 실행 | 검증됨 (2026-08) |
-| paper-ready corpus | 포함하지 않음 |
-| ICRA scientific annotation | schema/gate 지원, 실제 완성 corpus는 포함하지 않음 |
-| NaVILA, InternVLA-N1, InternVLA-M1 학습 | 지원 |
-| OmniVLA 학습 | 의존성 충돌로 미완 |
-
-현재 개발용 데이터가 `benchmark_ready=false` 또는
-`icra_scientific_ready=false`인 것은 launcher 오류가 아닙니다. full run은 의도적으로
-준비되지 않은 corpus를 차단합니다.
 
 ## Repository 구조
 
@@ -140,9 +108,9 @@ Builder는 다음 raw layout을 기대합니다.
         └── spot_cam/rgb_XXXX.png
 ```
 
-paper run에서는 warehouse 단위 split manifest가 필수입니다. 저장소의
-`configs/splits/paper_59_11.example.json`은 형식 예시일 뿐 의도적으로 유효하지 않습니다.
-실제 manifest를 별도 경로에 만들고 59/11 목록과 hash를 검수해야 합니다.
+paper run은 warehouse 단위 split manifest를 사용합니다. 형식은
+`configs/splits/paper_59_11.example.json`을 참고해 59/11 목록으로 작성합니다.
+데이터와 모델 가중치는 별도로 준비합니다.
 
 ## 1. Clone 및 RunPod 환경 설치
 
@@ -154,8 +122,7 @@ bash scripts/setup_runpod.sh
 source /workspace/venvs/saie-ft/bin/activate
 ```
 
-`HF_TOKEN`은 shell 환경변수나 RunPod secret으로만 전달하십시오. `.env`, YAML, shell
-script, Git history에 기록하지 마십시오.
+`HF_TOKEN`은 shell 환경변수나 RunPod secret으로 전달합니다.
 
 ```bash
 export HF_TOKEN='...'
@@ -174,8 +141,8 @@ python annotation_audit.py \
   --publication-strict
 ```
 
-원본은 수정하지 않습니다. `--publication-strict` 실패를 repair로 숨기지 말고 exporter와
-source data를 먼저 수정하십시오.
+audit은 원본을 읽기만 합니다. `--publication-strict`에서 실패하면 exporter와 source data를
+먼저 고칩니다.
 
 ## 3. SFT 데이터 생성
 
@@ -196,8 +163,7 @@ python data/build_sft_dataset.py \
 `repair_log.jsonl`입니다. 기본 학습 입력은 current `spot_cam` image 한 장과 mission이며,
 target은 exact canonical label 하나입니다.
 
-개발 smoke corpus는 서로 다른 warehouse가 최소 3개여야 합니다. paper 규모 gate를
-의도적으로 끄는 경우 그 결과는 benchmark-ready가 아닙니다.
+개발 smoke corpus는 서로 다른 warehouse가 최소 3개여야 합니다.
 
 ## 4. Preflight
 
@@ -235,8 +201,8 @@ bash scripts/launch_runpod.sh full 0
 - 실제 optimization scope: `full_text_backbone`
 - frozen: complete vision/audio towers와 input embedders/projectors
 
-즉 `full_ft.yaml`은 문자 그대로 모든 parameter를 학습하는 설정이 아닙니다. vision+text
-active parameter까지 학습하려면 smoke 검증 뒤 두 설정을 함께 바꿉니다.
+`full_ft.yaml`은 text backbone 전체를 학습합니다. vision+text active parameter까지
+학습하려면 smoke 검증 뒤 두 설정을 함께 바꿉니다.
 
 ```bash
 export SAIE_MODEL_CONFIG=configs/models/gemma4_all_active.yaml
@@ -293,7 +259,7 @@ bash -n scripts/evaluate_saie_judge.sh
 모델 download, processor contract, CUDA/H100, DeepSpeed runtime 검사는 실제 RunPod
 preflight에서 수행합니다.
 
-## 안전한 code bundle 생성
+## Code bundle 생성
 
 ```bash
 bash scripts/make_runpod_bundle.sh
@@ -301,18 +267,7 @@ cd dist
 sha256sum -c saie-finetuning-code_*.tar.gz.sha256
 ```
 
-bundle script는 공개 실행 코드 allowlist만 archive합니다. raw data, model, checkpoint,
-Git metadata, 내부 문서, screenshot은 포함하지 않습니다.
-
-## 중요한 제한사항
-
-- 이 코드는 open-loop 14-label SFT/evaluation harness이며 실제 closed-loop robot safety를
-  보증하지 않습니다.
-- `admissible_action_labels`, safe-action mask, gaze/localization metadata를 보존할 수 있어도
-  현재 기본 collator는 이를 auxiliary loss로 학습하지 않습니다.
-- 실제 inspection answer(gauge value, count, state)를 생성하는 head/evaluator는 아직 없습니다.
-- full run은 실제 paper split/corpus와 strict annotation gate 없이는 실행하지 마십시오.
-- H100 비용이 발생하기 전에 반드시 preflight와 `smoke-resume`을 통과하십시오.
+bundle script는 실행 코드 allowlist만 archive합니다.
 
 ## 문서
 
@@ -320,9 +275,3 @@ Git metadata, 내부 문서, screenshot은 포함하지 않습니다.
 - [`ANNOTATION_AUDIT.md`](./ANNOTATION_AUDIT.md): annotation audit 계약
 - [`configs/data_format_decision.md`](./configs/data_format_decision.md): data/prompt/split 결정
 - [`configs/README.md`](./configs/README.md): 실행 config map
-
-## License
-
-현재 이 snapshot에는 공개 재사용 라이선스가 포함되어 있지 않습니다. GitHub에 소스가
-보인다는 사실만으로 사용·수정·재배포 권한이 부여되지는 않습니다. 프로젝트 소유자가
-별도 코드 라이선스와 데이터/논문/third-party notice를 확정해야 합니다.
